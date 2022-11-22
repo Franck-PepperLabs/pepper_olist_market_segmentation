@@ -28,3 +28,4 @@ def table_content_analysis(data):
     display(data.describe(include='all').T)
     print(bold('content'), ':')
     display(data)
+

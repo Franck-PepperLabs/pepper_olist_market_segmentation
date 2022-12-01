@@ -30,3 +30,41 @@ def format_iB(n_bytes):
         return round(n_bytes / GiB, 3), 'GiB'
     else:
         return round(n_bytes / TiB), 'TiB'
+
+
+import pandas as pd
+def display_head_and_tail(data, n=5):
+    cdots_row = data.head(1).copy().apply(lambda x: '...')  # TODO : find a better way
+    cdots_row.index = ['...']
+    _data = pd.concat([data.head(n), cdots_row, data.tail(n)])
+    display(_data)
+
+def value_counts_and_freqs(data, label):
+    s = data[label]
+    freqs = pd.DataFrame({
+        'count': s.value_counts(normalize=False),
+        'freq': s.value_counts(normalize=True),
+    })
+    freqs.index.names = [label]
+    return freqs
+
+import matplotlib.pyplot as plt
+def plot_value_freqs(data, label, c='blue'):
+    freq = value_counts_and_freqs(data, label).sort_values(by='count').freq
+    freq.plot.barh(color=c)
+    plt.show()
+
+def discrete_stats(data, name): # TODO : add an indice based on Lorenz curve
+    """[count, unique_count, na_count, filling_rate, variety_rate] as [n, n_u, n_na, fr, vr] for each var in data"""
+    n = data.count()
+    n_u = data.nunique()
+    n_na = data.isna().sum()
+    stats = pd.DataFrame({
+        'n': n,
+        'n_u': n_u,
+        'n_na': n_na,
+        'fr': n / (n + n_na),
+        'vr': n_u / n,
+    }, index=data.columns)
+    stats.index.names = [name]
+    return stats

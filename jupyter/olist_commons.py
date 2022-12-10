@@ -31,8 +31,7 @@ def table_content_analysis(data):
     display(data)
 
 
-
-# as the tables are small we preload them
+# as the tables are small we preload them in the raw object format
 _customers = load_table('customers').astype(object)
 _geolocation = load_table('geolocation').astype(object)
 _order_items = load_table('order_items').astype(object)
@@ -75,6 +74,7 @@ def get_payment_types():
     return _order_payments.payment_type.unique()
 
 
+# TODO : Pascal : il y un param indicator qui ajoute une colonne de méta donnée sur la nature du join
 import pandas as pd
 def get_merged_data():
     m = get_order_items()
@@ -222,6 +222,43 @@ def get_order_ages(now):
         .rename('order_age')
     )
 
+def get_order_ages_2(
+    from_date=get_first_order_date(),
+    to_date = get_last_order_date()
+):
+    ord = get_orders()
+    is_ord_between = (
+        (from_date <= ord.order_purchase_timestamp)
+        & (ord.order_purchase_timestamp <= to_date)
+    )
+    ordb = ord[is_ord_between]
+    return to_date - (
+        ordb
+        .set_index('order_id')
+        .order_purchase_timestamp
+        .astype('datetime64[ns]')
+        .sort_values(ascending=False)
+        .rename('order_age')
+    )
+
+
+def get_customer_order_recency(
+    from_date=get_first_order_date(),
+    to_date = get_last_order_date()
+):
+    cop = get_customer_order_payment()
+    order_age = get_order_ages(get_last_order_date())
+    copa = pd.concat([cop, order_age], axis=1)
+    is_copa_between = (
+        (from_date <= copa.order_purchase_timestamp)
+        & (copa.order_purchase_timestamp <= to_date)
+    )
+    copab = copa[is_copa_between]
+
+    customer_recency = copab.drop_duplicates(subset='customer_unique_id')
+    customer_recency = customer_recency.set_index('customer_unique_id')
+    return customer_recency
+
 def get_customer_order_freqs_and_amount(
     from_date=get_first_order_date(),
     to_date = get_last_order_date()
@@ -239,3 +276,234 @@ def get_customer_order_freqs_and_amount(
     gpby.columns = ['order_count', 'order_amount']
     gpby = gpby.sort_values(by='order_count', ascending=False)
     return gpby
+
+def get_customer_RFM(
+    from_date=get_first_order_date(),
+    to_date = get_last_order_date()
+):
+    cor = get_customer_order_recency(from_date, to_date)
+    cofa = get_customer_order_freqs_and_amount(from_date, to_date)
+    crfm = pd.merge(cor[['order_age']], cofa, how='outer', on='customer_unique_id')
+    crfm.columns = ['R', 'F', 'M']
+    oneday = pd.Timedelta(days=1)
+    crfm.R = crfm.R / oneday
+    return crfm
+
+
+def get_unpaid_order_ids():
+    return pd.Index(list(
+        set(get_orders().order_id.unique())
+        - set(get_order_payments().order_id.unique())
+    ))
+
+def get_without_physical_features_product_ids():
+    products = get_products()
+    bindex = products.product_weight_g.isna()
+    without_physical_features_products = products[bindex]
+    return pd.Index(list(without_physical_features_products.product_id))
+
+def get_without_marketing_features_product_ids():
+    products = get_products()
+    bindex = products.product_category_name.isna()
+    without_marketing_features_products = products[bindex]
+    return pd.Index(list(without_marketing_features_products.product_id))
+
+def get_unknown_product_ids():
+    return (
+        get_without_physical_features_product_ids()
+        .intersection(get_without_marketing_features_product_ids())
+    )
+
+
+import matplotlib.pyplot as plt
+def plot_clusters_2d_v1(x, y, title, xlabel, ylabel, clu_labels):
+    plt.scatter(x, y, c=clu_labels)
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.show()
+
+import numpy as np
+import matplotlib.cm as cm
+def plot_clusters_2d(ax, title, xy, xy_labels, xy_clu_centers, clu_labels):
+    n_clusters = len(np.unique(clu_labels))
+    colors = cm.nipy_spectral(clu_labels.astype(float) / n_clusters)
+    ax.scatter(
+        xy[0], xy[1],
+        marker='.', s=30, lw=0, alpha=0.7,
+        c=colors, edgecolor='k',
+    )
+
+    # Clusters labeling
+    ax.scatter(
+        xy_clu_centers[0], xy_clu_centers[1],
+        marker='o', c='white', alpha=1, s=200,
+        edgecolor='k',
+    )
+    for i, (c_x, c_y) in enumerate(zip(xy_clu_centers[0], xy_clu_centers[1])):   
+        ax.scatter(
+            c_x, c_y,
+            marker=f'${i}$', alpha=1, s=50,
+            edgecolor='k'
+        )
+
+    ax.set_title(title)
+    ax.set_xlabel(xy_labels[0])
+    ax.set_ylabel(xy_labels[1])
+
+def plot_clusters_3d_v1(xyz, xyz_labels, clu_labels, title, figsize=(13, 13)):
+    fig = plt.figure(figsize=figsize) 
+    ax = fig.add_subplot(111, projection='3d', elev=10, azim=140)
+    ax.scatter(xyz[0], xyz[1], xyz[2], c=clu_labels, cmap=cm.Set1_r, edgecolor='k')
+    ax.set_xlabel(xyz_labels[0])
+    ax.set_ylabel(xyz_labels[1])
+    ax.set_zlabel(xyz_labels[2])
+    ax.set_title(title)
+
+def plot_clusters_3d(ax, title, xyz, xyz_labels, clu_labels):
+    n_clusters = len(np.unique(clu_labels))
+    colors = cm.nipy_spectral(clu_labels.astype(float) / n_clusters)
+    ax.scatter(xyz[0], xyz[1], xyz[2], c=colors)
+    ax.set_xlabel(xyz_labels[0])
+    ax.set_ylabel(xyz_labels[1])
+    ax.set_zlabel(xyz_labels[2])
+    ax.set_title(title)
+
+import matplotlib.cm as cm
+import numpy as np
+def plot_silhouette(ax, silhouette_avg, silhouette_values, clu_labels):
+    # The 1st subplot is the silhouette plot
+    # The silhouette coefficient can range from -1, 1 but in this example all
+    # lie within [-0.1, 1]
+    #ax.set_xlim([-0.1, 1])
+    # The (n_clusters + 1) * 10 is for inserting blank space between silhouette
+    # plots of individual clusters, to demarcate them clearly.
+    n_clusters = len(np.unique(clu_labels))
+    ax.set_ylim([0, len(silhouette_values) + (n_clusters + 1) * 10])
+
+    y_lower = 10
+    for i in range(n_clusters):
+        # Aggregate the silhouette scores for samples belonging to
+        # cluster i, and sort them
+        ith_cluster_silhouette_values = silhouette_values[clu_labels == i]
+
+        ith_cluster_silhouette_values.sort()
+
+        size_cluster_i = ith_cluster_silhouette_values.shape[0]
+        y_upper = y_lower + size_cluster_i
+
+        color = cm.nipy_spectral(float(i) / n_clusters)
+        ax.fill_betweenx(
+            np.arange(y_lower, y_upper),
+            0,
+            ith_cluster_silhouette_values,
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.7,
+        )
+
+        # Label the silhouette plots with their cluster numbers at the middle
+        ax.text(-0.05, y_lower + 0.5 * size_cluster_i, str(i))
+
+        # Compute the new y_lower for next plot
+        y_lower = y_upper + 10  # 10 for the 0 samples
+
+    ax.set_title("SILHOUETTE")
+    ax.set_xlabel("Silhouette values")
+    ax.set_ylabel("Cluster label")
+
+    # The vertical line for average silhouette score of all the values
+    ax.axvline(x=silhouette_avg, color="red", linestyle="--")
+
+    ax.set_yticks([])  # Clear the yaxis labels / ticks
+    ax.set_xticks([-0.1, 0, 0.2, 0.4, 0.6, 0.8, 1])
+
+def plot_kmeans_rfm_clusters(
+    rfm, rfm_labels, rfm_centers,
+    clu_labels, slh_avg, slh_vals
+):
+    n_clusters = len(np.unique(clu_labels))
+    r, f, m = rfm[0], rfm[1], rfm[2]
+    r_label, f_label, m_label = rfm_labels[0], rfm_labels[1], rfm_labels[2]
+    r_centers, f_centers, m_centers = rfm_centers[0], rfm_centers[1], rfm_centers[2]
+
+    fig = plt.figure(figsize=(15, 7))
+
+    ax1 = plt.subplot2grid((2, 4), (0, 0), colspan=2, rowspan=2, projection='3d', elev=10, azim=140)
+    ax2 = plt.subplot2grid((2, 4), (0, 2))
+    ax3 = plt.subplot2grid((2, 4), (0, 3))
+    ax4 = plt.subplot2grid((2, 4), (1, 2))
+    ax5 = plt.subplot2grid((2, 4), (1, 3))
+
+    plot_clusters_3d(
+        ax=ax1,
+        title=f'RMF 3D',
+        xyz=[r, m, f],
+        xyz_labels=[r_label, m_label, f_label],
+        clu_labels=clu_labels,
+    )
+
+    plot_silhouette(ax2, slh_avg, slh_vals, clu_labels)
+
+    ax3.semilogy()
+    plot_clusters_2d(
+        ax3, 'RM',
+        xy=[r, m], xy_labels=[r_label, m_label],
+        xy_clu_centers=[r_centers, m_centers],
+        clu_labels=clu_labels
+    )
+
+    plot_clusters_2d(
+        ax4, 'FR',
+        xy=[f, r], xy_labels=[f_label, r_label],
+        xy_clu_centers=[f_centers, r_centers],
+        clu_labels=clu_labels
+    )
+
+    ax5.semilogy()
+    plot_clusters_2d(
+        ax5, 'FM',
+        xy=[f, m], xy_labels=[f_label, m_label],
+        xy_clu_centers=[f_centers, m_centers],
+        clu_labels=clu_labels
+    )
+
+    plt.tight_layout()
+
+    plt.suptitle(
+        f'{n_clusters}-Means clusters',
+        fontsize=14,
+        fontweight='bold',
+        y=1.05,
+    )
+    plt.show()
+
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_samples, silhouette_score
+import time
+def kmeans_analysis(crfm, n_clusters):
+    km_t = -time.time()
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    kmeans.fit_predict(crfm)
+    km_t += time.time()
+    clu_labels = kmeans.labels_
+    clu_centers = kmeans.cluster_centers_
+    rfm = r, f, m = crfm.R, crfm.F, crfm.M
+    rfm_labels = r_label, f_label, m_label = 'Recency', 'Frequency', 'Monetary'
+    rfm_centers = r_centers, f_centers, m_centers = (
+        clu_centers[:, 0],
+        clu_centers[:, 1],
+        clu_centers[:, 2],
+    )
+    slh_t = -time.time()
+    slh_avg = silhouette_score(crfm, clu_labels)
+    slh_vals = silhouette_samples(crfm, clu_labels)
+    slh_t += time.time()
+    plot_kmeans_rfm_clusters(
+        rfm, rfm_labels, rfm_centers,
+        clu_labels, slh_avg, slh_vals)
+    plt.show()
+    print('silhouette average :', round(slh_avg, 3))
+    print('k-means fit time :', round(km_t, 3))
+    print('silouhette compute time :', round(slh_t, 3))
+    return slh_avg, km_t, slh_t

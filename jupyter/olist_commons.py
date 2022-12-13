@@ -478,12 +478,12 @@ def plot_kmeans_rfm_clusters(
     )
     plt.show()
 
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_samples, silhouette_score
+
 import time
-def kmeans_analysis(crfm, n_clusters):
+from sklearn.cluster import KMeans
+def kmeans_clustering(crfm, k):
     km_t = -time.time()
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    kmeans = KMeans(n_clusters=k, random_state=42)
     kmeans.fit_predict(crfm)
     km_t += time.time()
     clu_labels = kmeans.labels_
@@ -495,6 +495,27 @@ def kmeans_analysis(crfm, n_clusters):
         clu_centers[:, 1],
         clu_centers[:, 2],
     )
+    return kmeans, clu_labels, rfm, rfm_labels, rfm_centers, km_t
+
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_samples, silhouette_score
+import time
+def kmeans_analysis(crfm, k):
+    """km_t = -time.time()
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    kmeans.fit_predict(crfm)
+    km_t += time.time()
+    clu_labels = kmeans.labels_
+    clu_centers = kmeans.cluster_centers_
+    rfm = r, f, m = crfm.R, crfm.F, crfm.M
+    rfm_labels = r_label, f_label, m_label = 'Recency', 'Frequency', 'Monetary'
+    rfm_centers = r_centers, f_centers, m_centers = (
+        clu_centers[:, 0],
+        clu_centers[:, 1],
+        clu_centers[:, 2],
+    )"""
+    # k-Means clustering
+    _, clu_labels, rfm, rfm_labels, rfm_centers, km_t = kmeans_clustering(crfm, k)
     slh_t = -time.time()
     slh_avg = silhouette_score(crfm, clu_labels)
     slh_vals = silhouette_samples(crfm, clu_labels)
@@ -507,3 +528,76 @@ def kmeans_analysis(crfm, n_clusters):
     print('k-means fit time :', round(km_t, 3))
     print('silouhette compute time :', round(slh_t, 3))
     return slh_avg, km_t, slh_t
+
+
+def classes_labeling(rfm, classes_def):
+    label = pd.Series(data=-1, index=rfm.index, name='label')
+    for c_id in classes_def:
+        c_def = classes_def[c_id]
+        c_bindex = (
+              ((c_def['R'][0] <= rfm.R) & (rfm.R < c_def['R'][1]))
+            & ((c_def['M'][0] <= rfm.M) & (rfm.M < c_def['M'][1]))
+        )
+        label[c_bindex] = c_id
+    return label
+
+from pepper_commons import print_subtitle
+def clusters_business_analysis(crfm, k, classes_def):
+    # k-Means clustering
+    kmeans, clu_labels, rfm, rfm_labels, rfm_centers, km_t = kmeans_clustering(crfm, k)
+    r_label, f_label, m_label = rfm_labels
+    # Labeling
+    print_subtitle('Labeling')
+    crfm_labeled = pd.concat([
+        pd.Series(clu_labels, index=crfm.index, name='k_clu'),
+        crfm
+    ], axis=1)
+    display(crfm_labeled)
+    # Cluster cardinalities
+    print_subtitle('Cluster cardinalities')
+    clu_counts = crfm_labeled.k_clu.value_counts()
+    display(clu_counts)
+    # Cluster per feature stats
+    print_subtitle('Cluster per feature stats')
+    gpby = crfm_labeled.groupby(by='k_clu').agg(
+        ['min', 'max', 'mean', 'median', 'std', 'skew', pd.Series.kurt]
+    )
+    print(r_label)
+    display(gpby.R)
+    print(m_label)
+    display(gpby.M)
+    print(f_label + ' (less pertinent)')
+    display(gpby.F)
+
+    # Turnover
+    print_subtitle('Turnover')
+    m_labeled = crfm_labeled[['k_clu', 'M']]
+    m_gpby = m_labeled.groupby(by='k_clu').agg(
+        ['count', 'min', 'max', 'sum', 'mean', 'median', 'std', 'skew', pd.Series.kurt]
+    )
+    turnover_abs = m_gpby.M['sum'].rename('toa')
+    turnover_rel = (turnover_abs / turnover_abs.sum()).rename('tor')
+    turnover = pd.concat([turnover_abs, turnover_rel], axis=1)
+    display(turnover)
+    display(m_gpby.M)
+    # Hypercubic roughing of the domain
+    print_subtitle('Hypercubic roughing of the domain')
+    gpby_3 = crfm_labeled.groupby(by='k_clu').agg(
+        ['min', 'max']
+    )
+    display(gpby_3)
+    # Manual sterotyping
+    import numpy as np
+    print_subtitle('Manual sterotyping')
+    cla_labels = classes_labeling(crfm, classes_def)
+    crfm_mlabeled = pd.concat([
+    pd.Series(cla_labels, index=crfm.index, name='k_cla'),
+        crfm
+    ], axis=1)
+    display(crfm_mlabeled)
+    # Compare cluster (machine learning) | classes (manual)
+    print_subtitle('Compare cluster (machine learning) | classes (manual)')
+    cla_counts = crfm_mlabeled.k_cla.value_counts()
+    #display(cla_counts)
+    cl_comp = pd.concat([clu_counts, cla_counts], axis=1)
+    display(cl_comp)

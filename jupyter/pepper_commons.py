@@ -1,13 +1,36 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from IPython.display import display
+
+
 # pretty printing
-bold = lambda s: '\033[1m' + str(s) + '\033[0m'
-italic = lambda s: '\033[3m' + str(s) + '\033[0m'
-cyan = lambda s : '\033[36m' + str(s) + '\033[0m'
-magenta = lambda s : '\033[35m' + str(s) + '\033[0m'
-red = lambda s : '\033[31m' + str(s) + '\033[0m'
-green = lambda s : '\033[32m' + str(s) + '\033[0m'
+def bold(s):
+    return '\033[1m' + str(s) + '\033[0m'
+
+
+def italic(s):
+    return '\033[3m' + str(s) + '\033[0m'
+
+
+def cyan(s):
+    return '\033[36m' + str(s) + '\033[0m'
+
+
+def magenta(s):
+    return '\033[35m' + str(s) + '\033[0m'
+
+
+def red(s):
+    return '\033[31m' + str(s) + '\033[0m'
+
+
+def green(s):
+    return '\033[32m' + str(s) + '\033[0m'
+
 
 def print_title(txt):
     print(bold(magenta('\n' + txt.upper())))
+
 
 def print_subtitle(txt):
     print(bold(cyan('\n' + txt)))
@@ -19,6 +42,8 @@ KiB = 2**10
 MiB = KiB * KiB
 GiB = MiB * KiB
 TiB = GiB * KiB
+
+
 def format_iB(n_bytes):
     if n_bytes < KiB:
         return n_bytes, 'iB'
@@ -32,12 +57,13 @@ def format_iB(n_bytes):
         return round(n_bytes / TiB), 'TiB'
 
 
-import pandas as pd
 def display_head_and_tail(data, n=5):
-    cdots_row = data.head(1).copy().apply(lambda x: '...')  # TODO : find a better way
+    # TODO : find a better way
+    cdots_row = data.head(1).copy().apply(lambda x: '...')
     cdots_row.index = ['...']
     _data = pd.concat([data.head(n), cdots_row, data.tail(n)])
     display(_data)
+
 
 def value_counts_and_freqs(data, label):
     s = data[label]
@@ -48,14 +74,17 @@ def value_counts_and_freqs(data, label):
     freqs.index.names = [label]
     return freqs
 
-import matplotlib.pyplot as plt
+
 def plot_value_freqs(data, label, c='blue'):
     freq = value_counts_and_freqs(data, label).sort_values(by='count').freq
     freq.plot.barh(color=c)
     plt.show()
 
-def discrete_stats(data, name): # TODO : add an indice based on Lorenz curve
-    """[count, unique_count, na_count, filling_rate, variety_rate] as [n, n_u, n_na, fr, vr] for each var in data"""
+
+def discrete_stats(data, name):  # TODO : add an indice based on Lorenz curve
+    """[count, unique_count, na_count, filling_rate, variety_rate]
+    as [n, n_u, n_na, fr, vr] for each var in data
+    """
     n = data.count()
     n_u = data.nunique()
     n_na = data.isna().sum()

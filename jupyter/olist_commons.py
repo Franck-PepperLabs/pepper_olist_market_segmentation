@@ -541,20 +541,6 @@ def kmeans_clustering(crfm, k):
 
 
 def kmeans_analysis(crfm, k):
-    """km_t = -time.time()
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    kmeans.fit_predict(crfm)
-    km_t += time.time()
-    clu_labels = kmeans.labels_
-    clu_centers = kmeans.cluster_centers_
-    rfm = r, f, m = crfm.R, crfm.F, crfm.M
-    rfm_labels = r_label, f_label, m_label = 'Recency', 'Frequency', 'Monetary'
-    rfm_centers = r_centers, f_centers, m_centers = (
-        clu_centers[:, 0],
-        clu_centers[:, 1],
-        clu_centers[:, 2],
-    )"""
-    # k-Means clustering
     (
         _, clu_labels, rfm, rfm_labels, rfm_centers, km_t
     ) = kmeans_clustering(crfm, k)
@@ -719,12 +705,12 @@ def print_out_of_intersection(table_A, table_B, pk_name):
     print(
         f'|{name_A}.{pk_name} \\ {name_B}.{pk_name}| :',
         len(pk_A_not_B),
-        '(' + str(100 * round(len(pk_A_not_B) / len(pk_A), 3)) + '%)'
+        '(' + str(round(100 * len(pk_A_not_B) / len(pk_A), 3)) + '%)'
     )
     print(
         f'|{name_B}.{pk_name} \\ {name_A}.{pk_name}| :',
         len(pk_B_not_A),
-        '(' + str(100 * round(len(pk_B_not_A) / len(pk_B), 3)) + '%)'
+        '(' + str(round(100 * len(pk_B_not_A) / len(pk_B), 3)) + '%)'
     )
 
 
@@ -743,7 +729,7 @@ def display_relation_arities(table_A, table_B, pk_A, fk_B, verbose=False):
     ba_max = ba.index.max()
 
     print(
-        'relation arites : '
+        'relation arities : '
         f'[{name_A}]({ab_min}..{ab_max})'
         f'--({ba_min}..{ba_max})[{name_B}]'
     )

@@ -41,14 +41,7 @@ def load_product_category_name_translation():
 
 
 def table_content_analysis(data):
-    """
-    Perform a content analysis of a data table.
-
-    Parameters:
-    data (pandas.DataFrame): The data table to analyze.
-
-    Returns:
-    None
+    """Perform a content analysis of a data table.
     """
     # Print basic infos about the data table
     print_subtitle('basic infos')
@@ -70,64 +63,303 @@ def table_content_analysis(data):
 
 # as the tables are small we preload them in the raw object format
 _customers = load_table('customers').astype(object)
-_geolocation = load_table('geolocation').astype(object)
+_geolocations = load_table('geolocation').astype(object)
 _order_items = load_table('order_items').astype(object)
 _order_payments = load_table('order_payments').astype(object)
 _order_reviews = load_table('order_reviews').astype(object)
 _orders = load_table('orders').astype(object)
 _products = load_table('products').astype(object)
 _sellers = load_table('sellers').astype(object)
-_cats = load_product_category_name_translation()
+_product_categories = load_product_category_name_translation()
 
 
-def get_customers():
-    """
-    Get the customers data table.
-
-    Returns:
-    pandas.DataFrame: The customers data table.
-    """
-    return _customers.copy()
+""" Full raw table with object dtypes
+"""
 
 
-def get_geolocation():
-    return _geolocation.copy()
-
-
-def get_order_items():
+def get_raw_order_items():
+    """Get the order items raw data table."""
     return _order_items.copy()
 
 
-def get_order_payments():
-    return _order_payments.copy()
-
-
-def get_order_reviews():
-    return _order_reviews.copy()
-
-
-def get_orders():
+def get_raw_orders():
+    """Get the orders raw data table."""
     return _orders.copy()
 
 
-def get_products():
+def get_raw_customers():
+    """Get the customers raw data table."""
+    return _customers.copy()
+
+
+def get_raw_products():
+    """Get the products raw data table."""
     return _products.copy()
 
 
-def get_sellers():
+def get_raw_sellers():
+    """Get the sellers raw data table."""
     return _sellers.copy()
 
 
-def get_cats():
-    return _cats.copy()
+def get_raw_order_payments():
+    """Get the order payments raw data table."""
+    return _order_payments.copy()
+
+
+def get_raw_order_reviews():
+    """Get the order reviews raw data table."""
+    return _order_reviews.copy()
+
+
+def get_raw_product_categories():
+    """Get the product categories raw data table."""
+    return _product_categories.copy()
+
+
+def get_raw_geolocations():
+    """Get the geolocations raw data table."""
+    return _geolocations.copy()
+
+
+"""Tables indexed by their primary key
+"""
+
+
+def get_order_items(index=None):
+    """Get the order items pk-indexed data table."""
+    order_items = get_raw_order_items()
+    pk = pd.Series(list(zip(
+        order_items.order_id,
+        order_items.order_item_id
+    ))).rename('(order_id, order_item_id)')
+    order_items = order_items.set_index(pk)
+    order_items = order_items.drop(columns=['order_id', 'order_item_id'])
+    return order_items if index is None else order_items.loc[index]
+
+
+def get_orders(index=None):
+    """Get the orders pk-indexed data table."""
+    orders = get_raw_orders()
+    orders = orders.set_index('order_id', drop=True)
+    orders = orders.drop(columns='customer_id')
+    i = len('order_')
+    orders.columns = [c[i:] for c in orders.columns]
+    return orders if index is None else orders.loc[index]
+
+
+def get_customer_orders(index=None):
+    """Get the customer orders pk-indexed data table."""
+    customers = pd.merge(
+        get_raw_customers(),
+        get_raw_orders()[['order_id', 'customer_id']],
+        how='outer', on='customer_id'
+    )
+
+    customers = customers.set_index('order_id', drop=True)
+    customers = customers.drop(columns='customer_id')
+    customers = customers.rename(
+        columns={'customer_unique_id': 'customer_id'}
+    )
+
+    i = len('customer_')
+    customers.columns = (
+        [customers.columns[0]]
+        + [c[i:] for c in customers.columns[1:]]
+    )
+
+    return customers if index is None else customers.loc[index]
+
+
+def get_products(index=None):
+    """Get the products pk-indexed data table."""
+    products = get_raw_products()
+    products = products.set_index('product_id', drop=True)
+    i = len('product_')
+    products.columns = [c[i:] for c in products.columns]
+    return products if index is None else products.loc[index]
+
+
+def get_sellers(index=None):
+    """Get the sellers pk-indexed data table."""
+    sellers = get_raw_sellers()
+    sellers = sellers.set_index('seller_id', drop=True)
+    i = len('seller_')
+    sellers.columns = [c[i:] for c in sellers.columns]
+    return sellers if index is None else sellers.loc[index]
+
+
+def get_order_payments(index=None):
+    """Get the order payments pk-indexed data table."""
+    order_payments = get_raw_order_payments()
+    pk = pd.Series(list(zip(
+        order_payments.order_id,
+        order_payments.payment_sequential
+    ))).rename('(order_id, payment_sequential)')
+    order_payments = order_payments.set_index(pk)
+    order_payments = order_payments.drop(
+        columns=['order_id', 'payment_sequential']
+    )
+    i = len('payment_')
+    order_payments.columns = [c[i:] for c in order_payments.columns]
+    return order_payments if index is None else order_payments.loc[index]
+
+
+def get_order_reviews(index=None):
+    """Get the order reviews pk-indexed data table."""
+    order_reviews = get_raw_order_reviews()
+    pk = pd.Series(list(zip(
+        order_reviews.order_id,
+        order_reviews.review_id
+    ))).rename('(order_id, review_id)')
+    order_reviews = order_reviews.set_index(pk)
+    order_reviews = order_reviews.drop(
+        columns=['order_id', 'review_id']
+    )
+    i = len('review_')
+    order_reviews.columns = [c[i:] for c in order_reviews.columns]
+    return order_reviews if index is None else order_reviews.loc[index]
+
+
+def get_product_categories(index=None):
+    """Get the product categories pk-indexed data table."""
+    products = get_products(index=index_of_documented_products())
+    counts = products.category_name.value_counts()
+    counts = counts.reset_index()
+    counts.columns = ['name', 'products_count']
+    categories = get_raw_product_categories()
+    categories.columns = ['name', 'name_EN']
+    categories = pd.merge(categories, counts, how='outer', on='name')
+    categories.index.name = 'product_category_id'
+    categories.loc[71, 'name_EN'] = 'kitchen_portables_and_food_preparators'
+    categories.loc[72, 'name_EN'] = 'pc_gamer'
+    return categories if index is None else categories.loc[index]
+
+
+def get_geolocations(index=None):
+    """Get the geolocations pk-indexed data table."""
+    geolocations = get_raw_geolocations()
+    geolocations.index.name = 'geolocation_id'
+    i = len('geolocation_')
+    geolocations.columns = [c[i:] for c in geolocations.columns]
+    return geolocations if index is None else geolocations.loc[index]
+
+
+""" Special cases indexes
+"""
+
+
+def index_of_delivered_orders(index=None):
+    orders = get_orders(index=index)
+    orders = orders[orders.status == 'delivered'].index
+    return orders if index is None else orders.loc[index]
+
+
+def index_of_undelivered_orders(index=None):
+    orders = get_orders(index=index)
+    orders = orders[~(orders.status == 'delivered')].index
+    return orders if index is None else orders.loc[index]
+
+
+def index_of_unpaid_orders(index=None):
+    """Returns the index of orders that have not been paid.
+    """
+    # Calculate the set difference between the set of unique order ids
+    # and the set of unique order ids that have been paid
+    return pd.Index(list(
+        set(get_raw_orders().order_id.unique())
+        - set(get_raw_order_payments().order_id.unique())
+    ))
+
+
+def customer_location_counts(index=None):
+    """Returns the customer location counts.
+    """
+    customer_orders = get_customer_orders(index=index)
+    customer_locs = customer_orders.drop_duplicates()
+    return customer_locs.customer_id.value_counts()
+
+
+def index_of_sedentary_customers(index=None):
+    """Returns the index of customers associated with a single location.
+    """
+    counts = customer_location_counts(index=index)
+    return counts[counts == 1].index.rename('customer_id')
+
+
+def index_of_nomadic_customers(index=None):
+    """Returns the index of customers associated with many locations.
+    """
+    counts = customer_location_counts(index=index)
+    return counts[counts > 1].index.rename('customer_id')
+
+
+def index_of_dimensioned_products(index=None):
+    """Returns the index of products that do have physical features.
+    """
+    products = get_products(index=index)
+    # Get products where the 'weight_g' column is not null
+    bindex = products.weight_g.notna()
+    products_subset = products[bindex]
+    return products_subset.index
+
+
+def index_of_undimensioned_products(index=None):
+    """Returns the index of products that have physical features.
+    """
+    products = get_products(index=index)
+    # Get products where the 'weight_g' column is null
+    bindex = products.weight_g.isna()
+    products_subset = products[bindex]
+    return products_subset.index
+
+
+def index_of_documented_products(index=None):
+    """Returns the index of products that have marketing features.
+    """
+    products = get_products(index=index)
+    # Get products where the 'category_name' column is not null
+    bindex = products.category_name.notna()
+    products_subset = products[bindex]
+    return products_subset.index
+
+
+def index_of_undocumented_products(index=None):
+    """Returns the index of products that do not have marketing features.
+    """
+    products = get_products(index=index)
+    # Get products where the 'category_name' column is null
+    bindex = products.category_name.isna()
+    products_subset = products[bindex]
+    return products_subset.index
+
+
+def index_of_fully_qualified_products(index=None):
+    """Returns the index of products that have all physical and marketing features.
+    """
+    return (
+        index_of_dimensioned_products(index=index)
+        .intersection(index_of_documented_products(index=index))
+    )
+
+
+def index_of_unknown_products(index=None):
+    """Returns the index of products that have no features.
+    """
+    return (
+        index_of_undimensioned_products(index=index)
+        .intersection(index_of_undocumented_products(index=index))
+    )
+
+
+""" ...
+"""
 
 
 def get_payment_types():
-    """
-    Get the unique payment types in the order payments data table.
-
+    """Get the unique payment types in the order payments data table.
     Returns:
-    numpy.ndarray: The unique payment types.
+        numpy.ndarray: The unique payment types.
     """
     return _order_payments.payment_type.unique()
 
@@ -139,13 +371,13 @@ def get_merged_data():
     Returns:
     pandas.DataFrame: The merged dataset.
     """
-    m = get_order_items()
-    m = pd.merge(m, get_orders(), how='outer', on='order_id')
-    m = pd.merge(m, get_products(), how='outer', on='product_id')
-    m = pd.merge(m, get_sellers(), how='outer', on='seller_id')
-    m = pd.merge(m, get_customers(), how='outer', on='customer_id')
-    m = pd.merge(m, get_order_payments(), how='outer', on='order_id')
-    m = pd.merge(m, get_order_reviews(), how='outer', on='order_id')
+    m = get_raw_order_items()
+    m = pd.merge(m, get_raw_orders(), how='outer', on='order_id')
+    m = pd.merge(m, get_raw_products(), how='outer', on='product_id')
+    m = pd.merge(m, get_raw_sellers(), how='outer', on='seller_id')
+    m = pd.merge(m, get_raw_customers(), how='outer', on='customer_id')
+    m = pd.merge(m, get_raw_order_payments(), how='outer', on='order_id')
+    m = pd.merge(m, get_raw_order_reviews(), how='outer', on='order_id')
     return m
 
 
@@ -169,13 +401,13 @@ def customer(customers, cu_id):
 
 def customer_states(customer):
     """
-    Get the unique states for a customer.
+    Get the unique states for a customer table subset.
 
     Parameters:
     customer (pandas.DataFrame): The customer data.
 
     Returns:
-    numpy.ndarray: The unique states for the customer.
+    numpy.ndarray: The unique states for selected customers.
     """
     return customer.customer_state.unique()
 
@@ -265,7 +497,7 @@ def test_customer_locations():
     """
     Test the customer_locations function.
     """
-    customers = get_customers()
+    customers = get_raw_customers()
     cu_id = 'fe59d5878cd80080edbd29b5a0a4e1cf'
     c = customer(customers, cu_id)
     c_locations = customer_locations(c)
@@ -280,7 +512,7 @@ def get_unique_customers():
     pandas.DataFrame: A DataFrame of unique customers and their locations.
     """
     return pd.DataFrame(
-        get_customers()
+        get_raw_customers()
         .groupby(by=['customer_unique_id'], group_keys=True)
         .apply(customer_locations),
         columns=['locations']
@@ -295,7 +527,7 @@ def get_aggregated_order_payments():
     pandas.DataFrame: The aggregated order payments data table.
     """
     # Load the order payments data table
-    op = get_order_payments()
+    op = get_raw_order_payments()
 
     # Sort the data table by order ID and payment sequential number
     op = op.sort_values(
@@ -322,6 +554,10 @@ def get_aggregated_order_payments():
     return op_gpby
 
 
+""" Derived features
+"""
+
+
 def get_order_times():
     """
     Get a DataFrame of order time data.
@@ -329,7 +565,7 @@ def get_order_times():
     Returns:
     pandas.DataFrame: A DataFrame of order time data.
     """
-    orders = get_orders()
+    orders = get_raw_orders()
     return pd.concat([
         orders[['order_id', 'customer_id', 'order_status']],
         (
@@ -366,8 +602,8 @@ def get_customer_order_payment():
     Returns:
     pandas.DataFrame: A DataFrame of customer, order and payment data.
     """
-    customers = get_customers()[['customer_id', 'customer_unique_id']]
-    orders = get_orders()[
+    customers = get_raw_customers()[['customer_id', 'customer_unique_id']]
+    orders = get_raw_orders()[
         ['order_id', 'customer_id', 'order_purchase_timestamp']
     ]
     orders.order_purchase_timestamp = (
@@ -389,16 +625,13 @@ def get_last_order_date():
     Returns:
         datetime: The last order date.
     """
-    return get_orders().order_purchase_timestamp.astype('datetime64[ns]').max()
+    return get_raw_orders().order_purchase_timestamp.astype('datetime64[ns]').max()
 
 
 def get_first_order_date():
     """Get the first order date.
-
-    Returns:
-        datetime: The first order date.
     """
-    return get_orders().order_purchase_timestamp.astype('datetime64[ns]').min()
+    return get_raw_orders().order_purchase_timestamp.astype('datetime64[ns]').min()
 
 
 def get_order_ages(now):
@@ -411,7 +644,7 @@ def get_order_ages(now):
         Series: A Series with the order ages, indexed by order id.
     """
     return now - (
-        get_orders()
+        get_raw_orders()
         .set_index('order_id')
         .order_purchase_timestamp
         .astype('datetime64[ns]')
@@ -430,7 +663,7 @@ def get_order_ages_2(
     If no dates are given, the function will use
     the first and last order dates in the orders table.
     """
-    ord = get_orders()
+    ord = get_raw_orders()
     is_ord_between = (
         (from_date <= ord.order_purchase_timestamp)
         & (ord.order_purchase_timestamp <= to_date)
@@ -525,60 +758,21 @@ def get_customer_RFM(
     return crfm
 
 
-def get_unpaid_order_ids():
-    """Returns a list of order ids for orders that have not been paid.
-
-    Returns:
-        pd.Index: the indices of unpaid orders.
-    """
-    # Calculate the set difference between the set of unique order ids
-    # and the set of unique order ids that have been paid
-    return pd.Index(list(
-        set(get_orders().order_id.unique())
-        - set(get_order_payments().order_id.unique())
-    ))
-
-
-def get_without_physical_features_product_ids():
-    """Returns a list of product ids for products
-    that do not have physical features.
-
-    Returns:
-        pd.Index: the indices of products without physical features.
-    """
-    products = get_products()
-    # Get products where the 'product_weight_g' column is null
-    bindex = products.product_weight_g.isna()
-    without_physical_features_products = products[bindex]
-    return pd.Index(list(without_physical_features_products.product_id))
+def get_product_physical_features(index=None):
+    products = get_products(index=index)
+    volume = (
+        products.length_cm
+        * products.height_cm
+        * products.width_cm
+    ).rename('volume_cm^3')
+    density = (
+        products.weight_g / volume
+    ).rename('density_g_cm^-3')
+    return pd.concat([volume, density], axis=1)
 
 
-def get_without_marketing_features_product_ids():
-    """Returns a list of product ids for products
-    that do not have marketing features.
-
-    Returns:
-        pd.Index: the indices of products without marketing features.
-    """
-    products = get_products()
-    # Get products where the 'product_category_name' column is null
-    bindex = products.product_category_name.isna()
-    without_marketing_features_products = products[bindex]
-    return pd.Index(list(without_marketing_features_products.product_id))
-
-
-def get_unknown_product_ids():
-    """Get the product ids for products with both missing physical features
-    and missing marketing features.
-
-    Returns:
-    pd.Index: product ids of products with both missing physical features
-    and missing marketing features.
-    """
-    return (
-        get_without_physical_features_product_ids()
-        .intersection(get_without_marketing_features_product_ids())
-    )
+""" Plots
+"""
 
 
 def plot_clusters_2d_v1(x, y, title, xlabel, ylabel, clu_labels):
@@ -855,7 +1049,90 @@ def plot_kmeans_rfm_clusters(
     plt.show()
 
 
-def kmeans_clustering(crfm, k):
+def plot_kmeans_rfm_clusters_v2(
+        rfm, rfm_labels,
+        clu_labels, clu_centers,
+        slh_avg, slh_vals
+):
+    """Plot the K-Means clustering results for the RFM features.
+
+    Parameters:
+    - rfm (list): The RFM features as a list of 3 elements (r, f, m).
+    - rfm_labels (list): The RFM feature labels as a list of 3 elements
+      (r_label, f_label, m_label).
+    - rfm_centers (list): The RFM feature clusters centers as a list of 3
+      elements (r_centers, f_centers, m_centers).
+    - clu_labels (array): The cluster labels for each sample.
+    - slh_avg (float): The average silhouette score for all the samples.
+    - slh_vals (array): The silhouette score for each sample.
+    """
+    n_clusters = len(np.unique(clu_labels))
+    r, f, m = rfm[0], rfm[1], rfm[2]
+    r_label, f_label, m_label = rfm_labels[0], rfm_labels[1], rfm_labels[2]
+    r_centers, f_centers, m_centers = (
+        clu_centers[:, 0],
+        clu_centers[:, 1],
+        clu_centers[:, 2],
+    )
+
+    # fig = 
+    plt.figure(figsize=(15, 7))
+
+    ax1 = plt.subplot2grid(
+        (2, 4), (0, 0),
+        colspan=2, rowspan=2,
+        projection='3d', elev=10, azim=140
+    )
+    ax2 = plt.subplot2grid((2, 4), (0, 2))
+    ax3 = plt.subplot2grid((2, 4), (0, 3))
+    ax4 = plt.subplot2grid((2, 4), (1, 2))
+    ax5 = plt.subplot2grid((2, 4), (1, 3))
+
+    plot_clusters_3d(
+        ax=ax1,
+        title=f'RMF 3D',
+        xyz=[r, m, f],
+        xyz_labels=[r_label, m_label, f_label],
+        clu_labels=clu_labels,
+    )
+
+    plot_silhouette(ax2, slh_avg, slh_vals, clu_labels)
+
+    ax3.semilogy()
+    plot_clusters_2d(
+        ax3, 'RM',
+        xy=[r, m], xy_labels=[r_label, m_label],
+        xy_clu_centers=[r_centers, m_centers],
+        clu_labels=clu_labels
+    )
+
+    plot_clusters_2d(
+        ax4, 'FR',
+        xy=[f, r], xy_labels=[f_label, r_label],
+        xy_clu_centers=[f_centers, r_centers],
+        clu_labels=clu_labels
+    )
+
+    ax5.semilogy()
+    plot_clusters_2d(
+        ax5, 'FM',
+        xy=[f, m], xy_labels=[f_label, m_label],
+        xy_clu_centers=[f_centers, m_centers],
+        clu_labels=clu_labels
+    )
+
+    plt.tight_layout()
+
+    plt.suptitle(
+        f'{n_clusters}-Means clusters',
+        fontsize=14,
+        fontweight='bold',
+        y=1.05,
+    )
+    plt.show()
+
+
+def kmeans_clustering(crfm, k, normalize=False):
     """
     Perform K-Means clustering on customer RFM data.
     Parameters
@@ -864,6 +1141,9 @@ def kmeans_clustering(crfm, k):
         recency, frequency, and monetary value of customer orders.
     k: int
         Number of clusters to form.
+    normalize: Boolean
+        If True (defaut is False), crfm is normalized before
+        performing K-Means clustering
 
     Returns
     kmeans: sklearn.cluster.KMeans
@@ -884,19 +1164,52 @@ def kmeans_clustering(crfm, k):
         Time taken to fit and predict with the KMeans model.
     """
     km_t = -time.time()
+    # Normalize the data
+    crfm_scaled = crfm
+    if normalize:
+        scaler = StandardScaler()
+        crfm_scaled = scaler.fit_transform(crfm)
     kmeans = KMeans(n_clusters=k, random_state=42)
-    kmeans.fit_predict(crfm)
+    kmeans.fit_predict(crfm_scaled)
     km_t += time.time()
     clu_labels = kmeans.labels_
-    clu_centers = kmeans.cluster_centers_
-    rfm = r, f, m = crfm.R, crfm.F, crfm.M
-    rfm_labels = r_label, f_label, m_label = 'Recency', 'Frequency', 'Monetary'
-    rfm_centers = r_centers, f_centers, m_centers = (
+    # clu_centers = kmeans.cluster_centers_
+    # rfm = r, f, m = crfm.R, crfm.F, crfm.M
+    rfm = crfm.R, crfm.F, crfm.M
+    # rfm_labels = r_label, f_label, m_label = 'Recency', 'Frequency', 'Monetary'
+    rfm_labels = 'Recency', 'Frequency', 'Monetary'
+    """rfm_centers = r_centers, f_centers, m_centers = (
         clu_centers[:, 0],
         clu_centers[:, 1],
         clu_centers[:, 2],
-    )
+    )"""
+    rfm_centers = get_centers(crfm, clu_labels)
     return kmeans, clu_labels, rfm, rfm_labels, rfm_centers, km_t
+
+
+def kmeans_clustering_v2(crfm, k, normalize=False):
+    km_t = -time.time()
+    # Normalize the data
+    X = crfm
+    if normalize:
+        scaler = StandardScaler()
+        X = scaler.fit_transform(crfm)
+    kmeans = KMeans(n_clusters=k, random_state=42)
+    kmeans.fit_predict(X)
+    km_t += time.time()
+    clu_labels = kmeans.labels_
+    # clu_centers = kmeans.cluster_centers_
+    # rfm = r, f, m = crfm.R, crfm.F, crfm.M
+    # rfm = crfm.R, crfm.F, crfm.M
+    # rfm_labels = r_label, f_label, m_label = 'Recency', 'Frequency', 'Monetary'
+    # rfm_labels = 'Recency', 'Frequency', 'Monetary'
+    """rfm_centers = r_centers, f_centers, m_centers = (
+        clu_centers[:, 0],
+        clu_centers[:, 1],
+        clu_centers[:, 2],
+    )"""
+    clu_centers = get_centers_v2(crfm, clu_labels)
+    return kmeans, clu_labels, clu_centers, km_t
 
 
 def kmeans_analysis(crfm, k):
@@ -935,7 +1248,7 @@ def kmeans_analysis(crfm, k):
     return slh_avg, km_t, slh_t
 
 
-def classes_labeling(rfm, classes_def):
+def classes_labeling_v1(rfm, classes_def):
     """Assign a label to each row of rfm
     based on the classes definition in `classes_def`.
 
@@ -972,6 +1285,49 @@ def classes_labeling(rfm, classes_def):
         )
         label[c_bindex] = c_id
     return label
+
+
+def cluster_to_abstract_class(
+    cluster: List[List[float]]
+) -> Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]:
+    # Initialiser les intervalles minimaux et maximaux à des valeurs extrêmes
+    min_intervals = [float("inf"), float("inf"), float("inf")]
+    max_intervals = [float("-inf"), float("-inf"), float("-inf")]
+
+    # Pour chaque point du cluster
+    for point in cluster:
+        # Mettre à jour les intervalles minimaux et maximaux si nécessaire
+        for i in range(3):
+            min_intervals[i] = min(min_intervals[i], point[i])
+            max_intervals[i] = max(max_intervals[i], point[i])
+
+    # Renvoyer les intervalles sous forme de tuples
+    return tuple(zip(min_intervals, max_intervals))
+
+
+def insert_cl_labels(crfm, cl_labels, name='cl'):
+    return pd.concat([
+        pd.Series(cl_labels, index=crfm.index, name=name),
+        crfm
+    ], axis=1)
+
+
+def get_cl_counts(crfm_labeled, name='cl'):
+    return crfm_labeled[name].value_counts()
+
+
+def get_cluster(crfm_labeled, clu_index):
+    clu = crfm_labeled[crfm_labeled.k_clu == clu_index]
+    return clu[['R', 'F', 'M']]
+
+
+def get_abstracted_classes(crfm, clu_labels):
+    k_values = np.unique(clu_labels)
+    crfm_labeled = insert_cl_labels(crfm, clu_labels)
+    return {
+        k: cluster_to_abstract_class(get_cluster(crfm_labeled, k).values)
+        for k in k_values
+    }
 
 
 def clusters_business_analysis(crfm, k, classes_def):
@@ -1154,11 +1510,14 @@ def get_brazil_states():
     return pd.read_html(str(table))[0]
 
 
+""" Entities and Relationships analysis
+"""
+
+
 def count_of_objets_A_by_objet_B(
     table: pd.DataFrame,
     col_A: str, col_B: str
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    # def count_of_objets_A_by_objet_B(table, col_A, col_B):
     """Counts the number and frequency of values of column `col_A`
     in `table` by values of column `col_B`.
 
@@ -1186,7 +1545,6 @@ def out_of_intersection(
    table_A: pd.DataFrame,
    table_B: pd.DataFrame, pk_name: str
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    # def out_of_intersection(table_A, table_B, pk_name):
     """Find the primary keys that are in one table but not the other.
 
     Parameters:
@@ -1202,15 +1560,10 @@ def out_of_intersection(
     - pk_B_not_A (np.ndarray):
         Primary keys of `table_B` that are not in `table_A`.
     """
-    """
     pk_A = table_A[pk_name].unique()
     pk_B = table_B[pk_name].unique()
     pk_A_not_B = np.array(list(set(pk_A) - set(pk_B)))
-    pk_B_not_A = np.array(list(set(pk_B) - set(pk_A)))"""
-    pk_A = table_A[pk_name].unique()
-    pk_B = table_B[pk_name].unique()
-    pk_A_not_B = np.setdiff1d(pk_A, pk_B)
-    pk_B_not_A = np.setdiff1d(pk_B, pk_A)
+    pk_B_not_A = np.array(list(set(pk_B) - set(pk_A)))
     return pk_A, pk_B, pk_A_not_B, pk_B_not_A
 
 
@@ -1219,7 +1572,6 @@ def print_out_of_intersection(
     table_B: pd.DataFrame,
     pk_name: str
 ) -> None:
-    # def print_out_of_intersection(table_A, table_B, pk_name):
     """Print the number and percentage of primary keys
     that are in one table but not the other.
 
@@ -1248,13 +1600,10 @@ def print_out_of_intersection(
 
 
 def display_relation_arities(
-    table_A: pd.DataFrame,
-    table_B: pd.DataFrame,
-    pk_A: str, fk_B: str,
+    table_A: pd.DataFrame, pk_A: str,
+    table_B: pd.DataFrame, fk_B: str,
     verbose: bool = False
-) -> None:
-    # def display_relation_arities(table_A, table_B,
-    # pk_A, fk_B, verbose=False):
+) -> Tuple[pd.DataFrame, pd.DataFrame, float, float, float, float]:
     """Compute and display statistics about the relation between two tables.
 
     Parameters:
@@ -1294,6 +1643,8 @@ def display_relation_arities(
         display(ab)
         display(ba)
 
+    return ab, ba, ab_min, ab_max, ba_min, ba_max
+
 
 def get_centers(
     crfm: pd.DataFrame,
@@ -1324,7 +1675,22 @@ def get_centers(
     )
 
 
-def get_centers(
+def get_centers_v2(crfm, cl_labels):
+    """Compute the centers of the clusters in the RFM space.
+
+    Parameters:
+    - crfm (pd.DataFrame): RFM data.
+    - cl_labels (List[int]): Cluster labels for each observation in `crfm`.
+    """
+    crfm_cl_labeled = pd.concat([
+        pd.Series(cl_labels, index=crfm.index, name='k_cl'),
+        crfm
+    ], axis=1)
+    cl_means = crfm_cl_labeled.groupby(by='k_cl').mean()
+    return cl_means.values
+
+
+def plot_kmeans_rfm_clusters_and_classes(
     crfm: pd.DataFrame,
     rfm_labels: (Tuple[str, str, str]),
     clu_labels: List[int],

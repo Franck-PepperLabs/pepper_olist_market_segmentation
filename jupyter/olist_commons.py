@@ -7,6 +7,7 @@ from typing import List, Tuple
 from sys import getsizeof
 import time
 import requests
+from unidecode import unidecode
 from bs4 import BeautifulSoup
 import numpy as np
 import pandas as pd
@@ -24,20 +25,16 @@ from pepper_commons import format_iB, bold, print_subtitle
 
 
 def load_table(name):
+    """Load a data table from a file.
     """
-    Load a data table from a file.
-
-    Parameters:
-    name (str): The name of the table to load.
-
-    Returns:
-    pandas.DataFrame: The loaded data table.
-    """
-    return pd.read_csv(f'../data/olist_{name}_dataset.csv')
+    return pd.read_csv(f'../data/olist_{name}_dataset.csv', dtype=object)
 
 
 def load_product_category_name_translation():
-    return pd.read_csv(f'../data/product_category_name_translation.csv')
+    return pd.read_csv(
+        f'../data/product_category_name_translation.csv',
+        dtype=object
+    )
 
 
 def table_content_analysis(data):
@@ -62,14 +59,14 @@ def table_content_analysis(data):
 
 
 # as the tables are small we preload them in the raw object format
-_customers = load_table('customers').astype(object)
-_geolocations = load_table('geolocation').astype(object)
-_order_items = load_table('order_items').astype(object)
-_order_payments = load_table('order_payments').astype(object)
-_order_reviews = load_table('order_reviews').astype(object)
-_orders = load_table('orders').astype(object)
-_products = load_table('products').astype(object)
-_sellers = load_table('sellers').astype(object)
+_customers = load_table('customers')
+_geolocations = load_table('geolocation')
+_order_items = load_table('order_items')
+_order_payments = load_table('order_payments')
+_order_reviews = load_table('order_reviews')
+_orders = load_table('orders')
+_products = load_table('products')
+_sellers = load_table('sellers')
 _product_categories = load_product_category_name_translation()
 
 
@@ -135,6 +132,7 @@ def get_order_items(index=None):
     ))).rename('(order_id, order_item_id)')
     order_items = order_items.set_index(pk)
     order_items = order_items.drop(columns=['order_id', 'order_item_id'])
+    order_items.columns.name = 'order_items'
     return order_items if index is None else order_items.loc[index]
 
 
@@ -145,6 +143,7 @@ def get_orders(index=None):
     orders = orders.drop(columns='customer_id')
     i = len('order_')
     orders.columns = [c[i:] for c in orders.columns]
+    orders.columns.name = 'orders'
     return orders if index is None else orders.loc[index]
 
 
@@ -161,12 +160,12 @@ def get_customer_orders(index=None):
     customers = customers.rename(
         columns={'customer_unique_id': 'customer_id'}
     )
-
     i = len('customer_')
     customers.columns = (
         [customers.columns[0]]
         + [c[i:] for c in customers.columns[1:]]
     )
+    customers.columns.name = 'customers_orders'
 
     return customers if index is None else customers.loc[index]
 
@@ -177,6 +176,7 @@ def get_products(index=None):
     products = products.set_index('product_id', drop=True)
     i = len('product_')
     products.columns = [c[i:] for c in products.columns]
+    products.columns.name = 'products'
     return products if index is None else products.loc[index]
 
 
@@ -186,6 +186,7 @@ def get_sellers(index=None):
     sellers = sellers.set_index('seller_id', drop=True)
     i = len('seller_')
     sellers.columns = [c[i:] for c in sellers.columns]
+    sellers.columns.name = 'sellers'
     return sellers if index is None else sellers.loc[index]
 
 
@@ -202,6 +203,7 @@ def get_order_payments(index=None):
     )
     i = len('payment_')
     order_payments.columns = [c[i:] for c in order_payments.columns]
+    order_payments.columns.name = 'order_payments'
     return order_payments if index is None else order_payments.loc[index]
 
 
@@ -218,6 +220,7 @@ def get_order_reviews(index=None):
     )
     i = len('review_')
     order_reviews.columns = [c[i:] for c in order_reviews.columns]
+    order_reviews.columns.name = 'order_reviews'
     return order_reviews if index is None else order_reviews.loc[index]
 
 
@@ -226,13 +229,16 @@ def get_product_categories(index=None):
     products = get_products(index=index_of_documented_products())
     counts = products.category_name.value_counts()
     counts = counts.reset_index()
-    counts.columns = ['name', 'products_count']
+    counts.columns = ['category_name', 'products_count']
     categories = get_raw_product_categories()
-    categories.columns = ['name', 'name_EN']
-    categories = pd.merge(categories, counts, how='outer', on='name')
+    categories.columns = ['category_name', 'category_name_EN']
+    categories = pd.merge(categories, counts, how='outer', on='category_name')
+    categories.columns.name = 'product_categories'
     categories.index.name = 'product_category_id'
-    categories.loc[71, 'name_EN'] = 'kitchen_portables_and_food_preparators'
-    categories.loc[72, 'name_EN'] = 'pc_gamer'
+    categories.loc[71, 'category_name_EN'] = \
+        'kitchen_portables_and_food_preparators'
+    categories.loc[72, 'category_name_EN'] = 'pc_gamer'
+    categories.columns.name = 'product_categories'
     return categories if index is None else categories.loc[index]
 
 
@@ -242,6 +248,11 @@ def get_geolocations(index=None):
     geolocations.index.name = 'geolocation_id'
     i = len('geolocation_')
     geolocations.columns = [c[i:] for c in geolocations.columns]
+    geolocations.columns.name = 'geolocations'
+    # Permutation of columns
+    cols = geolocations.columns
+    new_cols = list(cols[1:3]) + [cols[0]] + list(cols[3:])
+    geolocations = geolocations[new_cols]
     return geolocations if index is None else geolocations.loc[index]
 
 
@@ -335,7 +346,8 @@ def index_of_undocumented_products(index=None):
 
 
 def index_of_fully_qualified_products(index=None):
-    """Returns the index of products that have all physical and marketing features.
+    """Returns the index of products with all
+    physical and marketing features provided.
     """
     return (
         index_of_dimensioned_products(index=index)
@@ -621,17 +633,24 @@ def get_customer_order_payment():
 
 def get_last_order_date():
     """Get the last order date.
-
-    Returns:
-        datetime: The last order date.
     """
-    return get_raw_orders().order_purchase_timestamp.astype('datetime64[ns]').max()
+    return (
+        get_raw_orders()
+        .order_purchase_timestamp
+        .astype('datetime64[ns]')
+        .max()
+    )
 
 
 def get_first_order_date():
     """Get the first order date.
     """
-    return get_raw_orders().order_purchase_timestamp.astype('datetime64[ns]').min()
+    return (
+        get_raw_orders()
+        .order_purchase_timestamp
+        .astype('datetime64[ns]')
+        .min()
+    )
 
 
 def get_order_ages(now):
@@ -1075,7 +1094,6 @@ def plot_kmeans_rfm_clusters_v2(
         clu_centers[:, 2],
     )
 
-    # fig = 
     plt.figure(figsize=(15, 7))
 
     ax1 = plt.subplot2grid(
@@ -1176,7 +1194,8 @@ def kmeans_clustering(crfm, k, normalize=False):
     # clu_centers = kmeans.cluster_centers_
     # rfm = r, f, m = crfm.R, crfm.F, crfm.M
     rfm = crfm.R, crfm.F, crfm.M
-    # rfm_labels = r_label, f_label, m_label = 'Recency', 'Frequency', 'Monetary'
+    # rfm_labels = r_label, f_label, m_label = \
+    # 'Recency', 'Frequency', 'Monetary'
     rfm_labels = 'Recency', 'Frequency', 'Monetary'
     """rfm_centers = r_centers, f_centers, m_centers = (
         clu_centers[:, 0],
@@ -1201,7 +1220,8 @@ def kmeans_clustering_v2(crfm, k, normalize=False):
     # clu_centers = kmeans.cluster_centers_
     # rfm = r, f, m = crfm.R, crfm.F, crfm.M
     # rfm = crfm.R, crfm.F, crfm.M
-    # rfm_labels = r_label, f_label, m_label = 'Recency', 'Frequency', 'Monetary'
+    # rfm_labels = r_label, f_label, m_label = \
+    # 'Recency', 'Frequency', 'Monetary'
     # rfm_labels = 'Recency', 'Frequency', 'Monetary'
     """rfm_centers = r_centers, f_centers, m_centers = (
         clu_centers[:, 0],
@@ -1404,7 +1424,7 @@ def clusters_business_analysis(crfm, k, classes_def):
     # Manual sterotyping
     import numpy as np
     print_subtitle('Manual sterotyping')
-    cla_labels = classes_labeling(crfm, classes_def)
+    cla_labels = classes_labeling_v1(crfm, classes_def)
     crfm_mlabeled = pd.concat([
         pd.Series(cla_labels, index=crfm.index, name='k_cla'),
         crfm
@@ -1490,12 +1510,12 @@ def select_outof_region(geolocation, lng_limits, lat_limits):
     return geolocation[~(lng_limits & lat_limits)]
 
 
-def get_brazil_states():
-    """
-    Get the dataframe containing the list of states in Brazil from Wikipedia.
+"""Scraping"""
 
-    Returns:
-        pd.DataFrame: The dataframe containing the list of states in Brazil.
+
+def get_brazil_states():
+    """Get the dataframe containing the list of states in Brazil
+    from Wikipedia.
     """
     # get the HTML content
     url = 'https://en.wikipedia.org/wiki/Federative_units_of_Brazil#List'
@@ -1508,6 +1528,259 @@ def get_brazil_states():
 
     # turn it into dataframe
     return pd.read_html(str(table))[0]
+
+
+def scrap_brazil_municipalities():
+    """Get the dataframe containing the list of municipalities in Brazil
+    from Wikipedia.
+    """
+    # get the HTML content
+    url = 'https://en.wikipedia.org/wiki/List_of_municipalities_of_Brazil'
+    response = requests.get(url)
+    # print(response.status_code)
+
+    # parse data from the html into a beautifulsoup object
+    soup = BeautifulSoup(response.text, 'html.parser')
+    data_list = []
+    for table in soup.find_all('table', {'class': 'wikitable sortable'}):
+        # Find the h2 (Brazil's region)
+        #      and h3 (Brazil's state) elements preceding the table
+        h2 = table.find_previous('h2')
+        h3 = table.find_previous('h3')
+        # Extract the text of the h2 and h3 element
+        region_name = h2.text[:-len('[edit]')]
+        state_name_and_code = h3.text[:-len('[edit]')]
+        state_code = state_name_and_code[-3:-1]
+        state_name = state_name_and_code[:-5]
+        # Read the table and turn it into dataframe
+        data = pd.read_html(str(table))[0]
+        # Insert region and state data to the dataframe
+        data.insert(0, 'CO', state_code)
+        data.insert(0, 'State', state_name)
+        data.insert(0, 'Region', region_name)
+        # Add the dataframe to the list
+        data_list += [data]
+
+    # merge into a unique dataframe
+    all = pd.concat(data_list, axis=0, ignore_index=True)
+
+    # Add a column 'is_state_capital' and remove (State Capital) from name
+    is_state_capital = all.Municipality.str.endswith('(State Capital)')
+    all['is_state_capital'] = is_state_capital
+    fixed_names = all.Municipality.str[:-len(' (State Capital)')]
+    all.loc[is_state_capital, 'Municipality'] = fixed_names
+    #st_capital_name =  if cities.str.endswith('(State Capital)') else cities
+    return all
+
+
+def get_municipalities(municipalities=None):
+    if municipalities is None:
+        municipalities = scrap_brazil_municipalities()
+    return (
+        municipalities[['CO', 'Municipality']]
+        .drop_duplicates()
+        .sort_values(by='CO')
+        .reset_index(drop=True)
+    )
+
+
+def remove_accents(s):
+    return unidecode(s)
+
+
+def get_municipality_states(municipalities=None):
+    if municipalities is None:
+        municipalities = scrap_brazil_municipalities()
+    municipality_states = (
+        municipalities[['CO', 'State']]
+        .drop_duplicates()
+        .sort_values(by='CO')
+        .reset_index(drop=True)
+    )
+    municipality_states.columns = ['2A', 'Stãte']
+    municipality_states['State'] = (
+        municipality_states.Stãte.apply(remove_accents)
+    )
+    return municipality_states
+
+
+def load_brazil_zip_codes():
+    """
+    0. country code      : iso country code, 2 characters
+    1. postal code       : varchar(20)
+    2. place name        : varchar(180)
+    3. admin name1       : 1. order subdivision (state) varchar(100)
+    4. admin code1       : 1. order subdivision (state) varchar(20)
+    _5. admin name2       : 2. order subdivision (county/province) varchar(100)
+    6. admin code2       : 2. order subdivision (county/province) varchar(20)
+    _7. admin name3       : 3. order subdivision (community) varchar(100)
+    _8. admin code3       : 3. order subdivision (community) varchar(20)
+    9. latitude          : estimated latitude (wgs84)
+    10. longitude         : estimated longitude (wgs84)
+    11. accuracy          : accuracy of lat/lng from
+                            1=estimated, 4=geonameid,
+                            6=centroid of addresses or shape
+    """
+    # Raw loading
+    zips = pd.read_csv(
+        f'../data/geonames_BR/BR.txt',
+        sep='\t',
+        header=None,
+        dtype=object
+    )
+    zips = zips.dropna(axis=1, how='all')
+    zips.columns.name = 'zip_codes'
+    zips.columns = [
+        'country_code', 'postal_code', 'place_name',
+        'admin name1', 'admin_code1', 'admin code2',
+        'latitude', 'longitude', 'accuracy'
+    ]
+    # Feature engineering
+    zips = zips.drop(columns=['country_code', 'accuracy'])  # rmv cst cols
+    zips = zips.apply(lambda x: x.str.strip() if x.dtype == 'object' else x)
+    return zips
+
+
+def get_zip_code_states(zip_codes=None):
+    if zip_codes is None:
+        zip_codes = load_brazil_zip_codes()
+    zip_code_states = (
+        zip_codes[['admin_code1', 'admin name1']]
+        .drop_duplicates()
+        .sort_values(by='admin name1')
+        .reset_index(drop=True)
+    )
+    zip_code_states.columns = ['2D', 'State']
+    return zip_code_states
+
+
+def get_states_encoding_table():
+    municipality_states = get_municipality_states()
+    zip_code_states = get_zip_code_states()
+    states = pd.merge(municipality_states, zip_code_states, on='State')
+    states = states[['2D', '2A', 'Stãte', 'State']]
+    return states
+
+
+def load_brazil_zip_codes_compl():
+
+    def zip_range_extract(x):
+        return x[1:10], x[11:-1]
+
+    # Raw loading
+    zips = pd.read_csv(
+        f'../data/datasets_BR/br-city-codes.csv',
+        dtype=object
+    )
+
+    # Feature engineering
+    zips.columns.name = 'zip_codes_compl'
+    zips = zips.drop(columns=['creation', 'extinction', 'notes'])  # rmv cst cols
+    # zips = zips.apply(lambda x: x.str.strip() if x.dtype == 'object' else x)
+    zip_ranges = zips.postalCode_ranges
+    zips.postalCode_ranges = zip_ranges.apply(zip_range_extract)
+    return zips
+
+
+def get_zip_ranges_table():
+
+    def expand_zip_range(s):
+        return (
+            s.apply(lambda x: x[0][:5]).rename('range_from'),
+            s.apply(lambda x: x[1][:5]).rename('range_to')
+        )
+
+    zip_compls = load_brazil_zip_codes_compl()
+
+    zip_ranges = pd.concat(
+        list(expand_zip_range(zip_compls.postalCode_ranges))
+        + [zip_compls.name, zip_compls.state],
+        axis=1
+    )
+
+    # Sort the dataframe according to the range_from column
+    zip_ranges = zip_ranges.sort_values(by='range_from')
+    return zip_ranges
+
+
+""" Geolocations cleaning
+"""
+
+def get_zcs_reduction(data):
+    zcs_cols = ['zip_code_prefix', 'city', 'state']
+    data_zcs = data[zcs_cols]
+    return (
+        data_zcs
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+
+
+def get_name(zip_code, zip_ranges_table):
+    # Use binary search to find the row that corresponds to zip_code
+    left = 0
+    right = len(zip_ranges_table) - 1
+    while left <= right:
+        mid = (left + right) // 2
+        if zip_code < zip_ranges_table.iloc[mid]['range_from']:
+            right = mid - 1
+        elif zip_code > zip_ranges_table.iloc[mid]['range_to']:
+            left = mid + 1
+        else:
+            # If zip_code is within range_from and range_to,
+            # return the associated name
+            return zip_ranges_table.iloc[mid]['name']
+    # If no row is found, return None
+    return None
+
+
+def get_names_v1(zip_codes, zip_ranges_table):
+    """Bad perf version"""
+    return zip_codes.apply(
+        get_name,
+        zip_ranges_table=zip_ranges_table
+    )
+
+
+def get_names(zip_codes, ranges):
+    # Sort zip_codes in ascending order
+    zip_codes = zip_codes.sort_values()
+
+    # Get the sizes of the ranges table
+    # and the range_from, range_to, and name columns
+    m = len(ranges)
+    range_from = list(ranges.range_from)
+    range_to = list(ranges.range_to)
+    range_name = list(ranges.name)
+
+    # Initialize the result with an empty series
+    names = []
+
+    # Initialize the range index to the first row of the ranges table
+    j = 0
+
+    # For each zip code in the zip_codes table
+    for zip_code in list(zip_codes):
+        # While the range index is less than the length of the ranges table
+        # and the zip code is greater than the end of the range
+        while j < m and zip_code > range_to[j]:
+            # Move to the next range
+            j += 1
+
+        # If we found a range containing the zip code
+        if j < m and zip_code >= range_from[j]:
+            # Add the name of the range to the result
+            names += [range_name[j]]
+        else:
+            # If no range was found, add a NaN value to the result
+            names += [np.nan]
+
+    # Return the series of names with the same index as the input zip_codes
+    names = pd.Series(names, index=zip_codes.index, name='names')
+
+    # Sort the names by index
+    names = names.sort_index()
+    return names
 
 
 """ Entities and Relationships analysis
@@ -1765,7 +2038,8 @@ def select_k_with_anova(
     metric: str, optional (default='inertia')
         Metric to use for the ANOVA. Can be either 'inertia' or 'silhouette'.
     verbose: bool, optional (default=True)
-        Whether to print the time taken to fit and predict with the KMeans model for each value of k.
+        Whether to print the time taken to fit and predict
+        with the KMeans model for each value of k.
     Returns
     -------
     k: int
@@ -1786,8 +2060,11 @@ def select_k_with_anova(
         # Create a KMeans model with k clusters
         kmeans, clu_labels, _, _, _, km_t = kmeans_clustering(crfm, k)
         if verbose:
-            print(f'Time for kmeans_clustering with k={k} :', round(km_t, 3), 's')
-        
+            print(
+                f'Time for kmeans_clustering with k={k} :',
+                round(km_t, 3), 's'
+            )
+
         # Calculate the anova score for the current model
         if metric == 'inertia':
             score = kmeans.inertia_
@@ -1820,8 +2097,8 @@ def select_k_with_anova(
 
 
 def select_k_with_davies_bouldin(X, k_min=2, k_max=20):
-    """
-    Calculate the Davies-Bouldin index for each value of k and plot the results as a bar chart.
+    """Calculate the Davies-Bouldin index for each value of k
+    and plot the results as a bar chart.
 
     Parameters
     ----------
@@ -1829,10 +2106,6 @@ def select_k_with_davies_bouldin(X, k_min=2, k_max=20):
         The data to cluster.
     k_min, k_max : int
         The minimum and maximum number of clusters to consider.
-
-    Returns
-    -------
-    None
     """
     # Create a list of k values to test
     k_values = list(range(k_min, k_max+1))

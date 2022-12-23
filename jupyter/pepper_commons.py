@@ -181,7 +181,7 @@ def categorical_stats(data, name):
     return stats
 
 
-def discrete_stats(data, name):
+def discrete_stats(data, name=None):
     """[count, unique_count, na_count, filling_rate, variety_rate]
     as [n, n_u, n_na, fr, vr] for each var in data
     """
@@ -195,6 +195,7 @@ def discrete_stats(data, name):
         'fr': n / (n + n_na),
         'vr': n_u / n,
     }, index=data.columns)
-    stats.index.names = [name]
+    if name is not None:
+        stats.index.names = [name]
 
     return stats

@@ -3,8 +3,10 @@ This module contains functions to load and analyze data tables
 for a e-commerce dataset.
 """
 
-from typing import List, Tuple
+from typing import *
+import re
 from sys import getsizeof
+from datetime import *
 import time
 import requests
 from unidecode import unidecode
@@ -22,19 +24,24 @@ from sklearn.metrics import (
 )
 from IPython.display import display
 from pepper_commons import format_iB, bold, print_subtitle
+from pepper_selection import filtered_copy
+from pepper_cache import Cache
 
 
 def load_table(name):
     """Load a data table from a file.
     """
-    return pd.read_csv(f'../data/olist_{name}_dataset.csv', dtype=object)
+    filepath = f'../data/olist_{name}_dataset.csv'
+    data = pd.read_csv(filepath, dtype=object)
+    data.columns.name = 'raw_' + name
+    return data
 
 
-def load_product_category_name_translation():
-    return pd.read_csv(
-        f'../data/product_category_name_translation.csv',
-        dtype=object
-    )
+def load_product_categories_table():
+    filepath = '../data/product_category_name_translation.csv'
+    data = pd.read_csv(filepath, dtype=object)
+    data.columns.name = 'raw_product_categories'
+    return data
 
 
 def table_content_analysis(data):
@@ -59,71 +66,676 @@ def table_content_analysis(data):
 
 
 # as the tables are small we preload them in the raw object format
-_customers = load_table('customers')
-_geolocations = load_table('geolocation')
-_order_items = load_table('order_items')
-_order_payments = load_table('order_payments')
-_order_reviews = load_table('order_reviews')
-_orders = load_table('orders')
-_products = load_table('products')
-_sellers = load_table('sellers')
-_product_categories = load_product_category_name_translation()
+_raw_customers = load_table('customers')
+_raw_geolocations = load_table('geolocation')
+_raw_order_items = load_table('order_items')
+_raw_order_payments = load_table('order_payments')
+_raw_order_reviews = load_table('order_reviews')
+_raw_orders = load_table('orders')
+_raw_products = load_table('products')
+_raw_sellers = load_table('sellers')
+_raw_product_categories = load_product_categories_table()
 
 
-""" Full raw table with object dtypes
+# globals for pk-indexed unitary tables caching
+_cached_order_items = None
+_cached_order_items_mi = None
+_cached_orders = None
+_cached_customer_orders = None
+_cached_customers = None
+_cached_products = None
+_cached_sellers = None
+_cached_order_payments = None
+_cached_order_reviews = None
+_cached_product_categories = None
+_cached_geolocations = None
+
+
+# globals for pk-indexed merged tables caching
+_cached_categorized_products = None
+_cached_products_sales = None
+_cached_sellers_sales = None
+_cached_sales = None
+
+_cached_orders_reviews = None
+_cached_customers_orders = None
+_cached_orders_payments = None
+
+_cached_customers_orders_payments = None
+_cached_customers_orders_reviews = None
+_cached_orders_payments_reviews = None
+
+_cached_order_details = None
+_cached_sales_details = None
+
+_cached_all_in_one = None
+
+# _cached_order_payments_by_order = None
+# _cached_order_payments_by_customer = None
+
+
+def _is_identifier(identifier: str) -> bool:
+    return re.search('^[A-Za-z_][A-Za-z0-9_]*', identifier)
+
+
+def _set_global_variable(var_name: str, value):
+    """
+    Set a global variable with the given name and value.
+
+    Parameters:
+        - var_name (str): The name of the variable to set.
+            The variable name must be a non-empty string containing
+            only alphanumeric characters.
+        - value: The value to set the variable to.
+
+    Raises:
+        - ValueError: if `var_name` is not a valid string
+        - NameError: if a variable with the given `var_name` does not exist
+            in the global scope
+    """
+    if not (isinstance(var_name, str) and _is_identifier(var_name)):
+        raise ValueError(f"`var_name` {var_name} is not a valid identifier")
+    if var_name in globals():
+        globals()[var_name] = value
+    else:
+        raise NameError(f"`var_name` {var_name} not found in globals")
+
+
+def _get_cache(table_name: str) -> Union[pd.DataFrame, None]:
+    """
+    Get the cache of a table.
+
+    Parameters:
+        - table_name (str): The name of the table.
+            The table name must be a non-empty string.
+
+    Returns:
+        - Union[pd.DataFrame, None]: The cache of the table if it exists
+            and it is a DataFrame, None otherwise
+
+    Raises:
+        - ValueError: if `table_name` is not a valid string
+        - NameError: if a variable with the name '_cached_' + table_name
+            does not exist in the global scope
+        - TypeError: if the cache is not None or a pd.DataFrame
+    """
+    if not (isinstance(table_name, str) and _is_identifier(table_name)):
+        raise ValueError(
+            f"`table_name` {table_name} is not a valid identifier"
+        )
+    cache_name = '_cached_' + table_name
+    if cache_name not in globals():
+        raise NameError(f"{cache_name} not found in globals")
+    cache = globals()[cache_name]
+    if not (cache is None or isinstance(cache, pd.DataFrame)):
+        raise TypeError(
+            f"{cache_name} is not a DataFrame"
+            f"(its type is {type(cache)})"
+        )
+    return cache
+
+
+def _set_cache(table_name: str, value: Union[pd.DataFrame, None]) -> None:
+    """
+    Set the cache of a table.
+
+    Parameters:
+        - table_name (str): The name of the table.
+            The table name must be a non-empty string containing only
+            alphanumeric characters.
+        - value: The value to set the cache to. The value must be None
+            or a pd.DataFrame
+
+    Returns:
+        The cache.
+
+    Raises:
+        - ValueError: if `table_name` is not a valid string
+        - TypeError: if the `value` is not None or a pd.DataFrame
+    """
+    if not (isinstance(table_name, str) and _is_identifier(table_name)):
+        raise ValueError(
+            f"`table_name` {table_name} is not a valid identifier"
+        )
+    if not (value is None or isinstance(value, pd.DataFrame)):
+        raise TypeError("`value` is not None or a DataFrame")
+    cache_name = '_cached_' + table_name
+    _set_global_variable(cache_name, value)
+    return value
+
+
+def _get_cache_loader(table_name: str) -> Callable[[], Type[pd.DataFrame]]:
+    """
+    Get the cache loader function of a table.
+
+    Parameters:
+        - table_name (str): The name of the table.
+            The table name must be a non-empty string containing only
+            alphanumeric characters.
+
+    Returns:
+        - Callable[[], Type[pd.DataFrame]]: The cache loader function.
+
+    Raises:
+        - ValueError: if `table_name` is not a valid string
+        - NameError: if a variable with the name '_load_cached_' + table_name
+            does not exist in the global scope
+    """
+    if not (isinstance(table_name, str) and _is_identifier(table_name)):
+        raise ValueError(
+            f"`table_name` {table_name} is not a valid identifier"
+        )
+    loader_name = '_load_cached_' + table_name
+    if loader_name not in globals():
+        raise NameError(f"{loader_name} not found in globals")
+    loader = globals()[loader_name]
+    if not isinstance(loader, Callable):
+        raise TypeError(
+            f"{loader_name} is not a Callable"
+            f"(its type is {type(loader)})"
+        )
+    return loader
+
+
+def _init_cache(table_name: str) -> None:
+    """
+    Initialize the cache for a table.
+    If the cache for the table does not exist, it is loaded using
+    the corresponding cache loader.
+
+    Parameters:
+    - table_name (str): The name of the table.
+        The table name must be a non-empty string containing
+        only alphanumeric characters.
+
+    Returns:
+        The cache.
+
+    Raises:
+    - ValueError: if `table_name` is not a valid string
+    - NameError: if a variable with the name '_cached_' + table_name
+        or '_load_cached_' + table_name  does not exist in the global scope
+    """
+    cache = _get_cache(table_name)
+    cache_loader = _get_cache_loader(table_name)
+    if cache is None:
+        cache = _set_cache(table_name, cache_loader())
+    return cache
+
+
+""" Raw tables with object dtypes
 """
 
 
-def get_raw_order_items():
-    """Get the order items raw data table."""
-    return _order_items.copy()
+def filter_by_indices(
+    data: pd.DataFrame,
+    filter_columns: Dict[str, Optional[Iterable]]
+) -> pd.DataFrame:
+    """Filter a data table by multiple indices.
+
+    Args:
+        data (pd.DataFrame): The data table to filter.
+        filter_columns (dict): A dictionary mapping column names to indices.
+            Rows in the data table that do not have values in the indices
+            for the respective columns will be filtered out.
+
+    Returns:
+        pd.DataFrame: The data table with rows filtered by the indices.
+    """
+    # Create a boolean mask that is True for every row
+    mask = pd.Series(True, index=data.index)
+
+    # Iterate through the columns to filter by, and update the mask
+    # if an index is provided
+    for column, index in filter_columns.items():
+        if index is not None:
+            mask &= data[column].isin(index)
+
+    # Return the data table with the rows that match the mask
+    return data[mask]
 
 
-def get_raw_orders():
-    """Get the orders raw data table."""
-    return _orders.copy()
+def get_raw_order_items_v1() -> pd.DataFrame:
+    """Deprecated: use `get_raw_order_items` instead.
+    Returns the raw order items data table.
+    """
+    return _raw_order_items.copy()
 
 
-def get_raw_customers():
-    """Get the customers raw data table."""
-    return _customers.copy()
+def get_raw_order_items(
+    orders_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None,
+    sellers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the raw order items data table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            raw data table by.
+        products_index (iterable, optional): The products index to filter the
+            raw data table by.
+        sellers_index (iterable, optional): The sellers index to filter the
+            raw data table by.
+
+    Returns:
+        pd.DataFrame: The raw order items data table,
+            optionally filtered by the orders, products, and sellers indices.
+    """
+    return filter_by_indices(
+        data=_raw_order_items.copy(),
+        filter_columns={
+            'order_id': orders_index,
+            'product_id': products_index,
+            'seller_id': sellers_index
+        }
+    )
 
 
-def get_raw_products():
-    """Get the products raw data table."""
-    return _products.copy()
+def get_raw_orders_v1() -> pd.DataFrame:
+    """Deprecated: use `get_raw_orders` instead.
+    Returns the raw orders data table.
+    """
+    return _raw_orders.copy()
 
 
-def get_raw_sellers():
-    """Get the sellers raw data table."""
-    return _sellers.copy()
+def get_raw_orders(
+    orders_index: Optional[Iterable] = None,
+    customers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the raw orders data table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            raw data table by.
+        customers_index (iterable, optional): The customers index to filter
+            the raw data table by.
+
+    Returns:
+        pd.DataFrame: The raw orders data table,
+            optionally filtered by the orders and customers indices.
+    """
+    return filter_by_indices(
+        data=_raw_orders.copy(),
+        filter_columns={
+            'order_id': orders_index,
+            'customer_id': customers_index
+        }
+    )
 
 
-def get_raw_order_payments():
-    """Get the order payments raw data table."""
-    return _order_payments.copy()
+def get_raw_customers_v1() -> pd.DataFrame:
+    """Deprecated: use `get_raw_customers` instead.
+    Returns the raw customers data table.
+    """
+    return _raw_customers.copy()
 
 
-def get_raw_order_reviews():
-    """Get the order reviews raw data table."""
-    return _order_reviews.copy()
+def get_raw_customers(
+    customers_index: Optional[Iterable] = None,
+    unique_customers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the raw customers data table.
+
+    Args:
+        customers_index (iterable, optional): The customers index to filter
+            the raw data table by.
+        unique_customers_index (iterable, optional): The unique customers
+            index to filter the raw data table by.
+
+    Returns:
+        pd.DataFrame: The raw customers data table,
+            optionally filtered by the customers and unique customers indices.
+    """
+    return filter_by_indices(
+        data=_raw_customers.copy(),
+        filter_columns={
+            'customer_id': customers_index,
+            'customer_unique_id': unique_customers_index
+        }
+    )
+
+
+def get_raw_products_v1() -> pd.DataFrame:
+    """Deprecated: use `get_raw_products` instead.
+    Returns the raw products data table.
+    """
+    return _raw_products.copy()
+
+
+def get_raw_products(
+    products_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the raw products data table.
+
+    Args:
+        products_index (iterable, optional): The products index to filter the
+            raw data table by.
+
+    Returns:
+        pd.DataFrame: The raw products data table,
+            optionally filtered by the products index.
+    """
+    return filter_by_indices(
+        data=_raw_products.copy(),
+        filter_columns={
+            'product_id': products_index
+        }
+    )
+
+
+def get_raw_sellers_v1() -> pd.DataFrame:
+    """Deprecated: use `get_raw_sellers` instead.
+    Returns the raw sellers data table.
+    """
+    return _raw_sellers.copy()
+
+
+def get_raw_sellers(
+    sellers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the raw sellers data table.
+
+    Args:
+        sellers_index (iterable, optional): The sellers index to filter the
+            raw data table by.
+
+    Returns:
+        pd.DataFrame: The raw sellers data table,
+            optionally filtered by the sellers index.
+    """
+    return filter_by_indices(
+        data=_raw_sellers.copy(),
+        filter_columns={
+            'product_id': sellers_index
+        }
+    )
+
+
+def get_raw_order_payments_v1() -> pd.DataFrame:
+    """Deprecated: use `get_raw_order_payments` instead.
+    Returns the raw order payments data table.
+    """
+    return _raw_order_payments.copy()
+
+
+def get_raw_order_payments(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the raw order payments data table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            raw data table by.
+
+    Returns:
+        pd.DataFrame: The raw order payments data table,
+            optionally filtered by the orders index.
+    """
+    return filter_by_indices(
+        data=_raw_order_payments.copy(),
+        filter_columns={
+            'order_id': orders_index
+        }
+    )
+
+
+def get_raw_order_reviews_v1() -> pd.DataFrame:
+    """Deprecated: use `get_raw_order_reviews` instead.
+    Returns the raw order reviews data table.
+    """
+    return _raw_order_reviews.copy()
+
+
+def get_raw_order_reviews(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the raw order reviews data table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            raw data table by.
+
+    Returns:
+        pd.DataFrame: The raw order reviews data table,
+            optionally filtered by the orders index.
+    """
+    return filter_by_indices(
+        data=_raw_order_reviews.copy(),
+        filter_columns={
+            'order_id': orders_index
+        }
+    )
 
 
 def get_raw_product_categories():
-    """Get the product categories raw data table."""
-    return _product_categories.copy()
+    """Returns the raw product categories data table.
+
+    Returns:
+        pd.DataFrame: The raw product categories data table.
+    """
+    return _raw_product_categories.copy()
 
 
 def get_raw_geolocations():
-    """Get the geolocations raw data table."""
-    return _geolocations.copy()
+    """Returns the raw geolocations data table.
+
+    Returns:
+        pd.DataFrame: The raw geolocations data table.
+    """
+    return _raw_geolocations.copy()
 
 
-"""Tables indexed by their primary key
+"""Tables indexed by their primary key (simple or compound)
 """
 
 
-def get_order_items(index=None):
+def remove_columns_prefixes(
+    data: pd.DataFrame,
+    prefix: str,
+    start_indice: int = 0,
+    new_cols_name: Optional[str] = None
+) -> None:
+    """Remove the given prefix from the dataframe column names.
+
+    Args:
+        data (pd.DataFrame): The dataframe whose column names to modify.
+        prefix (str): The prefix to remove from the column names.
+        start_indice (int, optional): The index of the first column name to
+            remove the prefix from. Default is 0.
+        new_cols_name (str, optional): The new name for the dataframe column
+            names. If not provided, the old column name (if it exists and
+            starts with "raw_") will be used.
+
+    Returns:
+        None: The dataframe column names are modified in place.
+    """
+    i = len(prefix)  # The number of characters of the prefix to remove
+    old_cols_name = data.columns.name  # Save the old columns name for later
+
+    # Remove the prefix from the column names
+    if start_indice == 0:
+        data.columns = (
+            [c[i:] for c in data.columns]
+        )
+    else:
+        data.columns = (
+            list(data.columns[:start_indice])
+            + [c[i:] for c in data.columns[start_indice:]]
+        )
+
+    # Set the new columns name
+    if new_cols_name is None:
+        if old_cols_name is not None and old_cols_name.startswith('raw_'):
+            new_cols_name = old_cols_name[4:]
+    if new_cols_name is not None:
+        data.columns.name = new_cols_name
+
+
+def set_pk_index(
+        data: pd.DataFrame,
+        pk_columns: Union[str, List[str]],
+        pk_name: Optional[str] = None
+):
+    """Sets the primary key index of the data table.
+
+    Args:
+        data (pd.DataFrame): The data table.
+        pk_columns (Union[str, List[str]]): The primary key column(s). If a
+            single string, it will be used as the primary key index directly.
+            If a list, the primary key index will be a tuple of the values in
+            the list.
+        pk_name (str, optional): The name of the primary key index. If not
+            provided, the primary key index name will be the concatenation of
+            the primary key column names in parentheses if pk_columns is a
+            list, or the single column name if pk_columns is a string.
+
+    Returns:
+        None: inplace.
+    """
+    # If the primary key has only one column, set it as the index directly
+    if isinstance(pk_columns, str):
+        data.set_index(pk_columns, drop=True, inplace=True)
+    elif len(pk_columns) == 1:
+        data.set_index(pk_columns[0], drop=True, inplace=True)
+    else:
+        # If the primary key name is not provided, create it from the
+        # primary key column names
+        if pk_name is None:
+            #pk_name = '(' + ', '.join(pk_columns) + ')'
+            pk_name=tuple(pk_columns)
+
+        # Create a Series with the primary key values as tuples
+        pk = pd.Series(
+            list(zip(*[data[col] for col in pk_columns]))
+        ).rename(pk_name)
+
+        # Set the primary key Series as the index of the data table
+        data.set_index(pk, inplace=True)
+        data.drop(columns=pk_columns, inplace=True)
+
+
+def set_pk_multi_index(
+        data: pd.DataFrame,
+        pk_columns: Union[str, List[str]],
+        pk_name: Optional[str] = None
+):
+    """Sets the primary key index of the data table.
+
+    Args:
+        data (pd.DataFrame): The data table.
+        pk_columns (Union[str, List[str]]): The primary key column(s). If a
+            single string, it will be used as the primary key index directly.
+            If a list, the primary key index will be a tuple of the values in
+            the list.
+        pk_name (str, optional): The name of the primary key index. If not
+            provided, the primary key index name will be the concatenation of
+            the primary key column names in parentheses if pk_columns is a
+            list, or the single column name if pk_columns is a string.
+
+    Returns:
+        None: inplace.
+    """
+    # If the primary key has only one column, set it as the index directly
+    if isinstance(pk_columns, str):
+        data.set_index(pk_columns, drop=True, inplace=True)
+    elif len(pk_columns) == 1:
+        data.set_index(pk_columns[0], drop=True, inplace=True)
+    else:
+        # If the primary key name is not provided, create it from the
+        # primary key column names
+        if pk_name is None:
+            # pk_name = '(' + ', '.join(pk_columns) + ')'
+            pk_name=tuple(pk_columns)
+
+        """# Create a Series with the primary key values as tuples
+        pk = pd.Series(
+            list(zip(*[data[col] for col in pk_columns]))
+        ).rename(pk_name)"""
+
+        # Set the primary key Series as the index of the data table
+        data.set_index(pk_columns, inplace=True, drop=True)
+        # data.index.name = pk_name : not copied ?!?
+
+
+def cast_columns(
+    data: pd.DataFrame,
+    cols: Union[str, List[str]],
+    dtype: Type
+):
+    """Casts the specified columns in the dataframe to the specified dtype.
+
+    Args:
+        data (pd.DataFrame): The dataframe.
+        cols (Union[str, list]): The column name(s) to cast. If a single
+            string, it will be used as the column name to cast. If a list,
+            all the columns in the list will be cast.
+        dtype (Type): The type to cast the columns to (e.g. int, float, etc).
+
+    Returns:
+        None: inplace.
+
+    Example:
+        # Cast the weight, length, height and width columns to float
+        >>> cast_columns(products,
+        >>>     ['weight_g', 'length_cm', 'height_cm', 'width_cm']
+        >>> , float)
+        >>>
+        >>> # Cast the 'price' column to float
+        >>> cast_columns(products, 'price', float)
+
+        # Cast the 'shipping_limit_date' column to 'datetime64[ns]'
+        >>> cast_columns(order_items, 'shipping_limit_date', 'datetime64[ns]')
+
+        # Cast the 'price' and 'freight_value' columns to float
+        >>> cast_columns(order_items, ['price', 'freight_value'], float)
+    """
+    if isinstance(cols, str):
+        cols = [cols]
+
+    # Check if the s Series can be converted to the target type
+    def is_castable(s: pd.Series, dtype: Type) -> bool:
+        try:
+            s.astype(dtype)
+            return True
+        except ValueError:
+            return False
+
+    for col in cols:
+        if not is_castable(data[col], dtype):
+            raise ValueError(
+                f"Cannot cast column '{col}' to type '{dtype}'. "
+                f"Some values are not castable."
+            )
+
+    # Proceed the cast
+    data[cols] = data[cols].astype(dtype, copy=False)
+
+
+# Experimental
+# TODO : complete it, update the _load_foo functions,
+# compare (tests), remove old versions
+
+def _load_pk_indexed_table(
+    get_raw_table,
+    pk_index_params,
+    global_cache_name
+):
+    # Retrieve the raw data table
+    data = get_raw_table()
+
+    # Set the the index of the data table
+    set_pk_index(data=data, *pk_index_params)
+
+    # Remove the prefix from the columns of the data table
+    remove_columns_prefixes(data, 'seller_')
+
+    # Save to the cache global variable
+    _set_global_variable(global_cache_name, data)
+
+    return data.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_order_items_v1(index=None) -> pd.DataFrame:
     """Get the order items pk-indexed data table."""
     order_items = get_raw_order_items()
     pk = pd.Series(list(zip(
@@ -136,7 +748,129 @@ def get_order_items(index=None):
     return order_items if index is None else order_items.loc[index]
 
 
-def get_orders(index=None):
+def _load_cached_order_items():
+    # Retrieve the raw order items data table,
+    # optionally filtered by the orders, products and sellers indexes
+    oi = get_raw_order_items()
+
+    # Set the ('order_id', 'order_item_id') columns as the index of the
+    # order items data table
+    set_pk_index(oi, ['order_id', 'order_item_id'])
+
+    # Set the new columns name
+    oi.columns.name = 'order_items'
+
+    # Cast the 'shipping_limit_date' column to 'datetime64[ns]'
+    cast_columns(
+        oi,
+        'shipping_limit_date',
+        'datetime64[ns]'
+    )
+
+    # Cast the 'price' and 'freight_value' columns to float
+    cast_columns(oi, ['price', 'freight_value'], float)
+
+    # Save to the cache global variable
+    global _cached_order_items
+    _cached_order_items = oi
+
+    return oi.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_order_items(
+    orders_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None,
+    sellers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the pk-indexed order items data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            pk-indexed data table by.
+        products_index (iterable, optional): The products index to filter the
+            pk-indexed data table by.
+        sellers_index (iterable, optional): The sellers index to filter the
+            pk-indexed data table by.
+
+    Returns:
+        pd.DataFrame: The raw order items data table,
+            optionally filtered by the orders, products, and sellers indices.
+    """
+    # If the _cached_order_items table is not set, set it
+    global _cached_order_items
+    if _cached_order_items is None:
+        _load_cached_order_items()
+
+    return filtered_copy(
+        _cached_order_items,
+        rows_filter=(orders_index, None),
+        data_filter=[products_index, sellers_index]
+    )
+
+
+def _load_cached_order_items_mi():
+    # Retrieve the raw order items data table,
+    # optionally filtered by the orders, products and sellers indexes
+    oi_mi = get_raw_order_items()
+
+    # Set the ('order_id', 'order_item_id') columns as the index of the
+    # order items data table
+    set_pk_multi_index(oi_mi, ['order_id', 'order_item_id'])
+
+    # Set the new columns name
+    oi_mi.columns.name = 'order_items'
+
+    # Cast the 'shipping_limit_date' column to 'datetime64[ns]'
+    cast_columns(oi_mi, 'shipping_limit_date', 'datetime64[ns]')
+
+    # Cast the 'price' and 'freight_value' columns to float
+    cast_columns(oi_mi, ['price', 'freight_value'], float)
+
+    # Save to the cache global variable
+    global _cached_order_items_mi
+    _cached_order_items_mi = oi_mi
+
+    return oi_mi.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_order_items_multi_index(
+    orders_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None,
+    sellers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the pk-indexed order items data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            pk-indexed data table by.
+        products_index (iterable, optional): The products index to filter the
+            pk-indexed data table by.
+        sellers_index (iterable, optional): The sellers index to filter the
+            pk-indexed data table by.
+
+    Returns:
+        pd.DataFrame: The raw order items data table,
+            optionally filtered by the orders, products, and sellers indices.
+    """
+    # If the _cached_order_items table is not set, set it
+    global _cached_order_items_mi
+    if _cached_order_items_mi is None:
+        _load_cached_order_items_mi()
+
+    return filtered_copy(
+        _cached_order_items_mi,
+        rows_filter=(orders_index, None),
+        data_filter=[products_index, sellers_index]
+    )
+
+
+def get_orders_v1(index=None) -> pd.DataFrame:
     """Get the orders pk-indexed data table."""
     orders = get_raw_orders()
     orders = orders.set_index('order_id', drop=True)
@@ -144,10 +878,67 @@ def get_orders(index=None):
     i = len('order_')
     orders.columns = [c[i:] for c in orders.columns]
     orders.columns.name = 'orders'
+    orders = orders.astype({
+        'purchase_timestamp': 'datetime64[ns]',
+        'approved_at': 'datetime64[ns]',
+        'delivered_carrier_date': 'datetime64[ns]',
+        'delivered_customer_date': 'datetime64[ns]',
+        'estimated_delivery_date': 'datetime64[ns]'
+    })
+
     return orders if index is None else orders.loc[index]
 
 
-def get_customer_orders(index=None):
+def _load_cached_orders():
+    # Retrieve the raw orders data table
+    o = get_raw_orders()
+
+    # Set the 'order_id' column as the index of the orders data table
+    set_pk_index(o, 'order_id')
+
+    # Drop the 'customer_id' column which is redundant with 'order_id'
+    o.drop(columns='customer_id', inplace=True)
+
+    # Remove the 'order_' prefix from the column names
+    remove_columns_prefixes(o, 'order_')
+
+    # Cast the date columns (all from indice 1) to 'datetime64[ns]'
+    cast_columns(o, o.columns[1:], 'datetime64[ns]')
+
+    # Save to the cache global variable
+    global _cached_orders
+    _cached_orders = o
+
+    return o.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_orders(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the pk-indexed orders data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            pk-indexed data table by.
+    Returns:
+        pd.DataFrame: The pk-indexed orders data table,
+            optionally filtered by the orders indices.
+    """
+    # If the _cached_orders table is not set, set it
+    global _cached_orders
+    if _cached_orders is None:
+        _load_cached_orders()
+
+    return filtered_copy(
+        _cached_orders,
+        rows_filter=orders_index
+    )
+
+
+def get_customer_orders_v1(index=None) -> pd.DataFrame:
     """Get the customer orders pk-indexed data table."""
     customers = pd.merge(
         get_raw_customers(),
@@ -170,17 +961,198 @@ def get_customer_orders(index=None):
     return customers if index is None else customers.loc[index]
 
 
-def get_products(index=None):
+def _load_cached_customer_orders():
+    # Retrieve the raw customers and orders data table
+    # and merge them on customer_id key
+    co = pd.merge(
+        get_raw_customers(),
+        get_raw_orders()[['order_id', 'customer_id']],
+        how='inner', on='customer_id'
+    )
+
+    # Set the 'order_id' column as the index of the customer orders data
+    # table
+    set_pk_index(co, 'order_id')
+
+    # Remove the useless `customer_id` key
+    co.drop(columns='customer_id', inplace=True)
+
+    # Rename the 'real' customer ID into `customer_id`
+    co.rename(
+        columns={'customer_unique_id': 'customer_id'},
+        inplace=True
+    )
+
+    # Remove the 'customer_' prefix from the column names
+    remove_columns_prefixes(
+        data=co,
+        prefix='customer_',
+        start_indice=1,
+        new_cols_name='customers_orders'
+    )
+
+    # Normalize the city names in the data table
+    normalize_city_names(co)
+
+    # Save to the cache global variable
+    global _cached_customer_orders
+    _cached_customer_orders = co
+
+    return co.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_customer_orders(
+    orders_index: Optional[Iterable] = None,
+    customers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the customer orders pk-indexed data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter
+            the raw data table by.
+        customers_index (iterable, optional): The customers index to filter
+            the raw data table by.
+
+    Returns:
+        pd.DataFrame: The customer orders data table,
+            optionally filtered by the orders and customers indices.
+    """
+    # If the _cached_customer_orders table is not set, set it
+    global _cached_customer_orders
+    if _cached_customer_orders is None:
+        _load_cached_customer_orders()
+    return filtered_copy(
+        _cached_customer_orders,
+        rows_filter=orders_index,
+        data_filter=customers_index
+    )
+
+
+def get_customers_v1(index=None):
+    """Get the customers pk-indexed data table."""
+    customer_orders = get_customer_orders_v1().reset_index()
+    customer_orders = normalize_city_names_v1(customer_orders)
+    customers = customer_orders.groupby(by='customer_id').agg(list)
+    customers.columns.name = 'customers'
+    return customers if index is None else customers.loc[index]
+
+
+def _load_cached_customers():
+    # Retrieve the pk-indexed customer orders data table
+    co = get_customer_orders().reset_index()
+
+    # Group it by the `customer_id` key
+    c = co.groupby(by='customer_id').agg(tuple)
+    c.columns.name = 'customers'
+
+    # Save to the cache global variable
+    global _cached_customers
+    _cached_customers = c
+
+    return c.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_customers(
+    customers_index: Optional[Iterable] = None,
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the customers pk-indexed data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        customers_index (iterable, optional): The customers index to filter
+            the raw data table by.
+        orders_index (iterable, optional): The orders index to filter
+            the raw data table by.
+
+    Returns:
+        pd.DataFrame: The customer orders data table,
+            optionally filtered by the orders and customers indices.
+    """
+    # If the _cached_customers table is not set, set it
+    global _cached_customers
+    if _cached_customers is None:
+        _load_cached_customers()
+
+    return filtered_copy(
+        _cached_customers,
+        rows_filter=customers_index,
+        data_filter=orders_index
+    )
+
+
+def get_products_v1(index=None):
     """Get the products pk-indexed data table."""
     products = get_raw_products()
     products = products.set_index('product_id', drop=True)
     i = len('product_')
     products.columns = [c[i:] for c in products.columns]
     products.columns.name = 'products'
+    products = products.astype({
+        'weight_g': float,
+        'length_cm': float,
+        'height_cm': float,
+        'width_cm': float
+    })
     return products if index is None else products.loc[index]
 
 
-def get_sellers(index=None):
+def _load_cached_products():
+    # Retrieve the raw products data table,
+    # optionally filtered by the products index
+    p = get_raw_products()
+
+    # Set the 'product_id' column as the index of the products data table
+    set_pk_index(p, 'product_id')
+
+    # Remove the 'products_' prefix from the columns of the products data
+    # table
+    remove_columns_prefixes(p, 'product_')
+
+    # Cast the weight, length, height and width columns to float
+    physical_features = ['weight_g', 'length_cm', 'height_cm', 'width_cm']
+    cast_columns(p, physical_features, float)
+
+    # Save to the cache global variable
+    global _cached_products
+    _cached_products = p
+
+    return p.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_products(
+    products_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the products pk-indexed data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        products_index (iterable, optional): The products index to filter the
+            pk-indexed data table by.
+
+    Returns:
+        pd.DataFrame: The pk-indexed products data table,
+            optionally filtered by the products index.
+    """
+    # If the _cached_products table is not set, set it
+    global _cached_products
+    if _cached_products is None:
+        _load_cached_products()
+
+    return filtered_copy(
+        _cached_products,
+        rows_filter=products_index
+    )
+
+
+def get_sellers_v1(index=None):
     """Get the sellers pk-indexed data table."""
     sellers = get_raw_sellers()
     sellers = sellers.set_index('seller_id', drop=True)
@@ -190,13 +1162,61 @@ def get_sellers(index=None):
     return sellers if index is None else sellers.loc[index]
 
 
-def get_order_payments(index=None):
-    """Get the order payments pk-indexed data table."""
-    order_payments = get_raw_order_payments()
+def _load_cached_sellers():
+    # Retrieve the raw sellers data table
+    s = get_raw_sellers()
+
+    # Set the 'seller_id' column as the index of the sellers data table
+    set_pk_index(s, 'seller_id')
+
+    # Remove the 'seller_' prefix from the columns of the sellers data
+    # table
+    remove_columns_prefixes(s, 'seller_')
+
+    # Normalize the city names in the sellers data table
+    normalize_city_names(s)
+
+    # Save to the cache global variable
+    global _cached_sellers
+    _cached_sellers = s
+
+    return s.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_sellers(
+    sellers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the pk-indexed sellers data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        sellers_index (iterable, optional): The sellers index to filter the
+            pk-indexed data table by.
+
+    Returns:
+        pd.DataFrame: The pk-indexed sellers data table,
+            optionally filtered by the sellers index.
+    """
+    # If the _cached_sellers table is not set, set it
+    global _cached_sellers
+    if _cached_sellers is None:
+        _load_cached_sellers()
+
+    return filtered_copy(
+        _cached_sellers,
+        rows_filter=sellers_index
+    )
+
+
+def get_order_payments_v1(orders_index=None):
+    """Get the order pk-indexed payments data table."""
+    order_payments = get_raw_order_payments(orders_index=orders_index)
     pk = pd.Series(list(zip(
         order_payments.order_id,
         order_payments.payment_sequential
-    ))).rename('(order_id, payment_sequential)')
+    ))).rename('(order_id, sequential)')
     order_payments = order_payments.set_index(pk)
     order_payments = order_payments.drop(
         columns=['order_id', 'payment_sequential']
@@ -204,10 +1224,71 @@ def get_order_payments(index=None):
     i = len('payment_')
     order_payments.columns = [c[i:] for c in order_payments.columns]
     order_payments.columns.name = 'order_payments'
-    return order_payments if index is None else order_payments.loc[index]
+    order_payments = order_payments.astype({
+        'value': float,
+    })
+
+    return (
+        order_payments if orders_index is None
+        else order_payments.loc[orders_index]
+    )
 
 
-def get_order_reviews(index=None):
+def _load_cached_order_payments():
+    # Retrieve the raw order payments data table,
+    # optionally filtered by the orders index
+    op = get_raw_order_payments()
+
+    # Set the ('order_id', 'payment_sequential') columns as the index of
+    # the order payments data table
+    set_pk_index(
+        data=op,
+        pk_columns=['order_id', 'payment_sequential'],
+        pk_name=('order_id', 'sequential')
+    )
+
+    # Remove the 'payment_' prefix from the columns of the sellers data
+    # table
+    remove_columns_prefixes(op, 'payment_')
+
+    # Cast the value column to float
+    cast_columns(op, ['value'], float)
+
+    # Save to the cache global variable
+    global _cached_order_payments
+    _cached_order_payments = op
+
+    return op.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_order_payments(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the pk-indexed order payments data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            pk-indexed data table by.
+
+    Returns:
+        pd.DataFrame: The pk-indexed order payments data table,
+            optionally filtered by the orders index.
+    """
+    # If the _cached_order_payments table is not set, set it
+    global _cached_order_payments
+    if _cached_order_payments is None:
+        _load_cached_order_payments()
+
+    return filtered_copy(
+        _cached_order_payments,
+        rows_filter=(orders_index, None)
+    )
+
+
+def get_order_reviews_v1(index=None):
     """Get the order reviews pk-indexed data table."""
     order_reviews = get_raw_order_reviews()
     pk = pd.Series(list(zip(
@@ -224,9 +1305,67 @@ def get_order_reviews(index=None):
     return order_reviews if index is None else order_reviews.loc[index]
 
 
-def get_product_categories(index=None):
+def _load_cached_order_reviews():
+    # Retrieve the raw sellers data table,
+    # optionally filtered by the orders index
+    orw = get_raw_order_reviews()
+
+    # Set the ('order_id', 'review_id') columns as the index of the
+    # order reviews data table
+    set_pk_index(orw, ['order_id', 'review_id'])
+
+    # Remove the 'review_' prefix from the columns of the sellers data
+    # table
+    remove_columns_prefixes(orw, 'review_')
+
+    # Cast the creation_date and answer_timestamp column to
+    # 'datetime64[ns]'
+    cast_columns(
+        orw,
+        ['creation_date', 'answer_timestamp'],
+        'datetime64[ns]'
+    )
+
+    # Cast the score column to int
+    cast_columns(orw, ['score'], int)
+
+    # Save to the cache global variable
+    global _cached_order_reviews
+    _cached_order_reviews = orw
+
+    return orw.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_order_reviews(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Returns the pk-indexed order reviews data table.
+
+    A cached table is constructed the first time this function is called.
+    Subsequent calls return an optionally filtered copy of tis cached table.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            pk-indexed data table by.
+
+    Returns:
+        pd.DataFrame: The pk-indexed order reviews data table,
+            optionally filtered by the orders index.
+    """
+    # If the _cached_order_reviews table is not set, set it
+    global _cached_order_reviews
+    if _cached_order_reviews is None:
+        _load_cached_order_reviews()
+
+    return filtered_copy(
+        _cached_order_reviews,
+        rows_filter=(orders_index, None)
+    )
+
+
+def get_product_categories_v1(index=None):
     """Get the product categories pk-indexed data table."""
-    products = get_products(index=index_of_documented_products())
+    products = get_products_v1(index=index_of_documented_products_v1())
     counts = products.category_name.value_counts()
     counts = counts.reset_index()
     counts.columns = ['category_name', 'products_count']
@@ -238,11 +1377,71 @@ def get_product_categories(index=None):
     categories.loc[71, 'category_name_EN'] = \
         'kitchen_portables_and_food_preparators'
     categories.loc[72, 'category_name_EN'] = 'pc_gamer'
-    categories.columns.name = 'product_categories'
     return categories if index is None else categories.loc[index]
 
 
-def get_geolocations(index=None):
+def _load_product_categories():
+    # Get the index of all documented products (with no NA category_name)
+    documented_products_index = index_of_documented_products()
+
+    # Retrieved the documented products table filtered by the optional
+    # product_index
+    products = get_products(
+        products_index=documented_products_index
+    )
+
+    # Build the empirical distribution of product categories
+    counts = products.category_name.value_counts()
+    counts = counts.reset_index()
+    counts.columns = ['category_name', 'products_count']
+
+    # Retrieve the raw product categories data table
+    categories = get_raw_product_categories()
+    categories.columns = ['category_name', 'category_name_EN']
+
+    # Merge the raw data table with the empirical distribution
+    pc = pd.merge(
+        categories,
+        counts,
+        how='outer',
+        on='category_name'
+    )
+
+    # Set the name of the columns and index
+    pc.columns.name = 'product_categories'
+    pc.index.name = 'product_category_id'
+
+    # Complete the english translation of unreferenced categories
+    pc.loc[71, 'category_name_EN'] = \
+        'kitchen_portables_and_food_preparators'
+    pc.loc[72, 'category_name_EN'] = 'pc_gamer'
+
+    # Save to the cache global variable
+    global _cached_product_categories
+    _cached_product_categories = pc
+
+    return pc.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_product_categories() -> pd.DataFrame:
+    """
+    Returns the pk-indexed product categories data table.
+
+    The data table is constructed the first time this function is called.
+    Subsequent calls return a copy of the data table.
+
+    Returns:
+        pd.DataFrame: The pk-indexed product categories data table.
+    """
+    # If the cached _product_categories is not set, set it
+    global _cached_product_categories
+    if _cached_product_categories is None:
+        _load_product_categories()
+
+    return _cached_product_categories.copy()
+
+
+def get_geolocations_v1(index=None):
     """Get the geolocations pk-indexed data table."""
     geolocations = get_raw_geolocations()
     geolocations.index.name = 'geolocation_id'
@@ -256,133 +1455,910 @@ def get_geolocations(index=None):
     return geolocations if index is None else geolocations.loc[index]
 
 
+def _load_cached_geolocations():
+    # Retrieve the raw geolocations data table
+    g = get_raw_geolocations()
+
+    # Fix the default positional index as the pk
+    g.index.name = 'geolocation_id'
+
+    # Remove the 'geolocation_' prefix from the column names
+    remove_columns_prefixes(g, 'geolocation_')
+
+    # Permute the columns to follow the standard order
+    cols = g.columns
+    new_cols = list(cols[1:3]) + [cols[0]] + list(cols[3:])
+    g = g[new_cols]
+
+    # Cast numerical objects into float :
+    # The conversion to float loses precision with only
+    #  5 significant digits
+    # against the 15 recorded. This corresponds to a metric precision of
+    # the order of a meter, which is more than enough in the context of
+    # the application.
+    cast_columns(g, ['lat', 'lng'], 'float64')
+
+    # Normalize the city names in the data table
+    normalize_city_names(g)
+
+    # Save to the cache global variable
+    global _cached_geolocations
+    _cached_geolocations = g
+
+    return g.copy()  # TODO : remove after filtered_copy bypassing tests
+
+
+def get_geolocations() -> pd.DataFrame:
+    """Retrieve and preprocess the geolocations data table.
+
+    This function retrieves the raw geolocations data table, fixes the
+    primary key (pk) index, removes the 'geolocation_' prefix from the
+    column names, permutes the columns to follow the standard order,
+    casts numerical objects into float, and normalizes the city names.
+
+    The data table is constructed the first time this function is called.
+    Subsequent calls return a copy of the data table.
+
+    Returns:
+        pd.DataFrame: The preprocessed, pk-indexed geolocations data table.
+    """
+    # If _cached_geolocations is not set, set it
+    global _cached_geolocations
+    if _cached_geolocations is None:
+        _load_cached_geolocations()
+
+    return _cached_geolocations.copy()
+
+
 """ Special cases indexes
 """
 
 
-def index_of_delivered_orders(index=None):
-    orders = get_orders(index=index)
-    orders = orders[orders.status == 'delivered'].index
-    return orders if index is None else orders.loc[index]
+def index_of_delivered_orders_v1(index=None) -> pd.Index:
+    """Returns the index of orders that have been delivered.
+    """
+    orders = get_orders_v1(index=index)
+    return orders[orders.status == 'delivered'].index
 
 
-def index_of_undelivered_orders(index=None):
-    orders = get_orders(index=index)
-    orders = orders[~(orders.status == 'delivered')].index
-    return orders if index is None else orders.loc[index]
+def index_of_undelivered_orders_v1(index=None) -> pd.Index:
+    """Returns the index of orders that have not been delivered.
+    """
+    orders = get_orders_v1(index=index)
+    return orders[orders.status != 'delivered'].index
 
 
-def index_of_unpaid_orders(index=None):
+def index_of_delivered_orders(
+    orders_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of orders that have been delivered.
+    """
+    orders = get_orders(orders_index=orders_index)
+    return orders[orders.status == 'delivered'].index
+
+
+def index_of_undelivered_orders(
+    orders_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of orders that have not been delivered.
+    """
+    orders = get_orders(orders_index=orders_index)
+    return orders[orders.status != 'delivered'].index
+
+
+def index_of_unpaid_orders_v1(index=None):
     """Returns the index of orders that have not been paid.
     """
     # Calculate the set difference between the set of unique order ids
     # and the set of unique order ids that have been paid
     return pd.Index(list(
-        set(get_raw_orders().order_id.unique())
-        - set(get_raw_order_payments().order_id.unique())
+        set(get_raw_orders_v1().order_id.unique())
+        - set(get_raw_order_payments_v1().order_id.unique())
     ))
 
 
-def customer_location_counts(index=None):
+def customer_location_counts_v1(index=None):
     """Returns the customer location counts.
+
+    DEPRECATED: use `get_customer_location_counts()` instead.
     """
-    customer_orders = get_customer_orders(index=index)
+    customer_orders = get_customer_orders_v1(index=index)
     customer_locs = customer_orders.drop_duplicates()
     return customer_locs.customer_id.value_counts()
 
 
-def index_of_sedentary_customers(index=None):
-    """Returns the index of customers associated with a single location.
+def get_customer_location_counts(
+    customers_index: Optional[Iterable] = None
+) -> pd.Series:
+    """Returns the customer location counts.
     """
-    counts = customer_location_counts(index=index)
+    customer_orders = get_customer_orders(
+        customers_index=customers_index
+    )
+    customer_locs = customer_orders.drop_duplicates()
+    return customer_locs.customer_id.value_counts()
+
+
+def index_of_sedentary_customers_v1(index=None):
+    """Returns the index of customers associated with a single location.
+
+    DEPRECATED: use `index_of_sedentary_customers()` instead.
+
+    Args:
+        index (iterable, optional): The orders index to filter the data
+            table by.
+
+    Returns:
+        pd.Index: The index of customers associated with a single location.
+    """
+    counts = customer_location_counts_v1(index=index)
     return counts[counts == 1].index.rename('customer_id')
 
 
-def index_of_nomadic_customers(index=None):
-    """Returns the index of customers associated with many locations.
+def index_of_sedentary_customers(
+    customers_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of customers associated with a single location.
+
+    Args:
+        customers_index (iterable, optional): The customers index to filter
+            the data table by.
+
+    Returns:
+        pd.Index: The index of customers associated with a single location.
     """
-    counts = customer_location_counts(index=index)
+    counts = get_customer_location_counts(
+        customers_index=customers_index
+    )
+    return counts[counts == 1].index
+
+
+def index_of_nomadic_customers_v1(index=None):
+    """Returns the index of customers associated with many locations.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the data
+            table by.
+
+    Returns:
+        pd.Index: The index of customers associated with many locations.
+    """
+    counts = customer_location_counts_v1(index=index)
     return counts[counts > 1].index.rename('customer_id')
 
 
-def index_of_dimensioned_products(index=None):
-    """Returns the index of products that do have physical features.
+def index_of_nomadic_customers(
+    customers_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of customers associated with many location.
+
+    Args:
+        customers_index (iterable, optional): The customers index to filter
+            the data table by.
+
+    Returns:
+        pd.Index: The index of customers associated with many location.
     """
-    products = get_products(index=index)
+    counts = get_customer_location_counts(
+        customers_index=customers_index
+    )
+    return counts[counts > 1].index
+
+
+def index_of_dimensioned_products_v1(index=None):
+    """Returns the index of products that have physical features.
+
+    DEPRECATED: use `index_of_dimensioned_products()` instead.
+
+    Args:
+        index (iterable, optional): The products index to filter the data
+            table by.
+
+    Returns:
+        pd.Index: The index of products that have physical features.
+    """
+    products = get_products_v1(index=index)
     # Get products where the 'weight_g' column is not null
     bindex = products.weight_g.notna()
     products_subset = products[bindex]
     return products_subset.index
 
 
-def index_of_undimensioned_products(index=None):
+def index_of_dimensioned_products(
+    products_index: Optional[Iterable] = None
+) -> pd.Index:
     """Returns the index of products that have physical features.
+
+    Args:
+        products_index (iterable, optional): The products index to filter the
+            data table by.
+
+    Returns:
+        pd.Index: The index of products that have physical features.
     """
-    products = get_products(index=index)
+    # Retrieve the products pk-indexed table
+    products = get_products(products_index=products_index)
+    # Filter products where the 'weight_g' column is not null
+    return products[products.weight_g.notna()].index
+
+
+def index_of_undimensioned_products_v1(index=None):
+    """Returns the index of products that do not have physical features.
+
+    DEPRECATED: use `index_of_undimensioned_products()` instead.
+
+    Args:
+        index (iterable, optional): The products index to filter the data
+            table by.
+
+    Returns:
+        pd.Index: The index of products that do not have physical features.
+    """
+    products = get_products_v1(index=index)
     # Get products where the 'weight_g' column is null
     bindex = products.weight_g.isna()
     products_subset = products[bindex]
     return products_subset.index
 
 
-def index_of_documented_products(index=None):
-    """Returns the index of products that have marketing features.
+def index_of_undimensioned_products(
+    products_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of products that do not have physical features.
+
+    Args:
+        index (iterable, optional): The products index to filter the data
+            table by.
+
+    Returns:
+        pd.Index: The index of products that do not have physical features.
     """
-    products = get_products(index=index)
+    # Retrieve the products pk-indexed table
+    products = get_products(products_index=products_index)
+    # Filter products where the 'weight_g' column is null
+    return products[products.weight_g.isna()].index
+
+
+def index_of_documented_products_v1(index=None):
+    """Returns the index of products that have marketing features.
+
+    DEPRECATED: use `index_of_documented_products()` instead.
+
+    Args:
+        index (iterable, optional): The products index to filter the data
+            table by.
+
+    Returns:
+        pd.Index: The index of products that have marketing features.
+    """
+    products = get_products_v1(index=index)
     # Get products where the 'category_name' column is not null
     bindex = products.category_name.notna()
     products_subset = products[bindex]
     return products_subset.index
 
 
-def index_of_undocumented_products(index=None):
-    """Returns the index of products that do not have marketing features.
+def index_of_documented_products(
+    products_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of products that have marketing features.
+
+    Args:
+        products_index (iterable, optional): The products index to filter the
+            data table by.
+
+    Returns:
+        pd.Index: The index of products that have marketing features.
     """
-    products = get_products(index=index)
+    # Retrieve the products pk-indexed table
+    products = get_products(products_index=products_index)
+    # Filter products where the 'category_name' column is not null
+    return products[products.category_name.notna()].index
+
+
+def index_of_undocumented_products_v1(index=None):
+    """Returns the index of products that do not have marketing features.
+
+    DEPRECATED: use `index_of_undocumented_products()` instead.
+
+    Args:
+        index (iterable, optional): The products index to filter the data
+            table by.
+
+    Returns:
+        pd.Index: The index of products that do not have marketing features.
+    """
+    # Retrieve the products pk-indexed table
+    products = get_products_v1(index=index)
     # Get products where the 'category_name' column is null
     bindex = products.category_name.isna()
     products_subset = products[bindex]
     return products_subset.index
 
 
-def index_of_fully_qualified_products(index=None):
+def index_of_undocumented_products(
+    products_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of products that do not have marketing features.
+
+    Args:
+        products_index (iterable, optional): The products index to filter the
+            data table by.
+
+    Returns:
+        pd.Index: The index of products that do not have marketing features.
+    """
+    # Retrieve the products pk-indexed table
+    products = get_products(products_index=products_index)
+    # Filter products where the 'category_name' column is null
+    return products[products.category_name.isna()].index
+
+
+def index_of_fully_qualified_products_v1(index=None):
     """Returns the index of products with all
     physical and marketing features provided.
     """
     return (
-        index_of_dimensioned_products(index=index)
-        .intersection(index_of_documented_products(index=index))
+        index_of_dimensioned_products_v1(index=index)
+        .intersection(index_of_documented_products_v1(index=index))
     )
 
 
-def index_of_unknown_products(index=None):
+def index_of_fully_qualified_products(
+    products_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of products with all
+    physical and marketing features provided.
+    """
+    # Retrieve the products pk-indexed table
+    products = get_products(products_index=products_index)
+    # Select products where
+    # both 'category_name' and 'weight_g' columns are not null
+    return products[
+        products.category_name.notna()
+        & products.weight_g.notna()
+    ].index
+
+
+def index_of_unknown_products_v1(index=None):
     """Returns the index of products that have no features.
+    DEPRECATED
     """
     return (
-        index_of_undimensioned_products(index=index)
-        .intersection(index_of_undocumented_products(index=index))
+        index_of_undimensioned_products_v1(index=index)
+        .intersection(index_of_undocumented_products_v1(index=index))
     )
 
 
-""" ...
+def index_of_unknown_products(
+    products_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of products that have no features.
+    """
+    # Retrieve the products pk-indexed table
+    products = get_products(products_index=products_index)
+    # Select products where
+    # both 'category_name' and 'weight_g' columns are null
+    return products[
+        products.category_name.isna()
+        & products.weight_g.isna()
+    ].index
+
+
+def index_of_sellers_from_state(
+    state: str,
+    sellers_index: Optional[Iterable] = None
+) -> pd.Index:
+    """Returns the index of products that have no features.
+    """
+    # Retrieve the sellers pk-indexed table
+    sellers = get_sellers(sellers_index=sellers_index)
+    # Select sellers where 'state' is state
+    return sellers[sellers.state == state].index
+
+
+""" Merging
 """
 
 
-def get_payment_types():
-    """Get the unique payment types in the order payments data table.
+def _expand_index(data: pd.DataFrame) -> pd.DataFrame:
+    data.index = pd.MultiIndex.from_tuples(
+        list(data.index),
+        names=data.index.name
+    )
+    return data
+
+
+def merge_col_indexes(*args: List[pd.DataFrame]) -> pd.MultiIndex:
+    return pd.MultiIndex.from_tuples(
+        [
+            (df.columns.name, col)
+            for df in args
+            for col in df.columns
+        ],
+        names=['object', 'features']
+    )
+
+
+def wrapped_merge(
+    x: pd.DataFrame,
+    y: pd.DataFrame,
+    **merge_kwargs
+) -> pd.DataFrame:
+    xy = pd.merge(x, y, **merge_kwargs)
+    xy = xy[list(x.columns) + list(y.columns)]
+    xy.columns = merge_col_indexes(x, y)
+    return xy
+
+
+def _load_categorized_products():
+    categories = get_product_categories().set_index('category_name')
+    products = get_products().reset_index()
+    categories.columns.name = 'categories'
+    data = wrapped_merge(
+        categories, products,
+        left_index=True, right_on='category_name',
+        how='outer'
+    )
+
+    data.set_index(
+        [
+            ('products', 'category_name'),
+            ('products', 'product_id')
+        ],
+        inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'category_name'),
+        ('_ident_', 'product_id')
+    ]
+    data.index.name = 'categorized_products'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_products_sales():
+    products = get_products()
+    sales = _expand_index(get_order_items())
+    sales.columns.name = 'sales'
+    data = wrapped_merge(
+        products, sales,
+        left_index=True, right_on='product_id',
+        how='outer'
+    )
+
+    data.set_index(('sales', 'product_id'), append=True, inplace=True)
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'order_item_id'),
+        ('_ident_', 'product_id')
+    ]
+    data.index.name = 'products_sales'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_sellers_sales():
+    sellers = get_sellers()
+    sales = _expand_index(get_order_items())
+    sales.columns.name = 'sales'
+    data = wrapped_merge(
+        sellers, sales,
+        left_index=True, right_on='seller_id',
+        how='outer'
+    )
+
+    data.set_index(('sales', 'seller_id'), append=True, inplace=True)
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'order_item_id'),
+        ('_ident_', 'seller_id')
+    ]
+    data.index.name = 'sellers_sales'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_sales():
+    orders = get_orders()
+    sales = _expand_index(get_order_items()).reset_index(1)
+    sales.columns.name = 'sales'
+    data = wrapped_merge(
+        sales, orders,
+        on='order_id',
+        how='outer'
+    )
+
+    data.set_index(
+        ('sales', 'order_item_id'),
+        append=True, inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'order_item_id')
+    ]
+    data.index.name = 'sales'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_orders_reviews():
+    reviews = _expand_index(get_order_reviews()).reset_index(1)
+    orders = get_orders()
+    reviews.columns.name = 'reviews'
+    data = wrapped_merge(
+        orders, reviews,
+        left_on='order_id', right_index=True,
+        how='outer'
+    )
+
+    data.set_index(
+        ('reviews', 'review_id'),
+        append=True, inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'review_id')
+    ]
+    data.index.name = 'orders_reviews'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_customers_orders():
+    customers = get_customer_orders()
+    orders = get_orders()
+    customers.columns.name = 'customers'
+    data = wrapped_merge(
+        customers,
+        orders,
+        on='order_id',
+        how='outer'
+    )
+
+    data.set_index(
+        ('customers', 'customer_id'),
+        append=True, inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'customer_id')
+    ]
+    data.index.name = 'orders_reviews'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_orders_payments():
+    payments = _expand_index(get_order_payments()).reset_index(1)
+    orders = get_orders()
+    payments.columns.name = 'payments'
+    data = wrapped_merge(
+        payments, orders,
+        left_index=True, right_on='order_id',
+        how='outer'
+    )
+
+    data.set_index(
+        ('payments', 'sequential'),
+        append=True, inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'sequential')
+    ]
+    data.index.name = 'orders_payments'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_customers_orders_payments():
+    c = get_customer_orders()
+    o = get_orders()
+    p = _expand_index(get_order_payments()).reset_index(1)
+
+    c.columns.name = 'customers'
+    p.columns.name = 'payments'
+
+    data = pd.merge(c, o, on='order_id', how='outer')
+    data = pd.merge(data, p, on='order_id', how='outer')
+
+    data.columns = merge_col_indexes(c, o, p)
+
+    data.set_index(
+        [
+            ('customers', 'customer_id'),
+            ('payments', 'sequential')
+        ],
+        append=True, inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'customer_id'),
+        ('_ident_', 'sequential')
+    ]
+    data.index.name = 'COP'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_customers_orders_reviews():
+    o = get_orders()
+    c = get_customer_orders()
+    r = _expand_index(get_order_reviews()).reset_index(1)
+
+    c.columns.name = 'customers'
+    r.columns.name = 'reviews'
+
+    data = pd.merge(c, o, on='order_id', how='outer')
+    data = pd.merge(data, r, on='order_id', how='outer')
+
+    data.columns = merge_col_indexes(c, o, r)
+
+    data.set_index(
+        [
+            ('customers', 'customer_id'),
+            ('reviews', 'review_id')
+        ],
+        append=True, inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'customer_id'),
+        ('_ident_', 'review_id')
+    ]
+    data.index.name = 'COR'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_orders_payments_reviews():
+    o = get_orders()
+    p = _expand_index(get_order_payments()).reset_index(1)
+    r = _expand_index(get_order_reviews()).reset_index(1)
+
+    p.columns.name = 'payments'
+    r.columns.name = 'reviews'
+
+    data = pd.merge(o, p, on='order_id', how='outer')
+    data = pd.merge(data, r, on='order_id', how='outer')
+
+    data.columns = merge_col_indexes(o, p, r)
+
+    data.set_index(
+        [
+            ('payments', 'sequential'),
+            ('reviews', 'review_id')
+        ],
+        append=True, inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'sequential'),
+        ('_ident_', 'review_id')
+    ]
+    data.index.name = 'OPR'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_order_details():
+    c = get_customer_orders()
+    o = get_orders()
+    p = _expand_index(get_order_payments()).reset_index(1)
+    r = _expand_index(get_order_reviews()).reset_index(1)
+
+    c.columns.name = 'customers'
+    p.columns.name = 'payments'
+    r.columns.name = 'reviews'
+
+    data = pd.merge(c, o, on='order_id', how='outer')
+    data = pd.merge(data, p, on='order_id', how='outer')
+    data = pd.merge(data, r, on='order_id', how='outer')
+
+    data.columns = merge_col_indexes(c, o, p, r)
+
+    data.set_index(
+        [
+            ('customers', 'customer_id'),
+            ('payments', 'sequential'),
+            ('reviews', 'review_id')
+        ],
+        append=True, inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'customer_id'),
+        ('_ident_', 'sequential'),
+        ('_ident_', 'review_id')
+    ]
+    data.index.name = 'OPR'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_sales_details():
+    i = _expand_index(get_order_items()).reset_index()
+    s = get_sellers()
+    c = get_product_categories().set_index('category_name')
+    p = get_products().reset_index().set_index('category_name')
+
+    c.columns.name = 'categories'
+    i.columns.name = 'sales'
+
+    cp = pd.merge(c, p, on='category_name', how='outer')
+    cp.reset_index('category_name', inplace=True)
+    c.reset_index('category_name', inplace=True)
+    p.set_index('product_id', inplace=True)
+    data = pd.merge(i, s, on='seller_id', how='outer')
+    data = pd.merge(data, cp, on='product_id', how='outer')
+
+    data.columns = merge_col_indexes(i, s, c, p)
+
+    data.set_index(
+        [
+            ('sales', 'order_id'),
+            ('sales', 'order_item_id'),
+            ('sales', 'product_id'),
+            ('sales', 'seller_id')
+        ],
+        inplace=True
+    )
+    data.index.names = [
+        ('_ident_', 'order_id'),
+        ('_ident_', 'order_item_id'),
+        ('_ident_', 'product_id'),
+        ('_ident_', 'seller_id')
+    ]
+    data.index.name = 'ISCP'
+    data.columns.name = data.index.name
+
+    return data
+
+
+def _load_cached_all_in_one():
+    od = get_order_details()
+    sd = get_sales_details()
+    sd.reset_index(inplace=True)
+    sd.set_index(('_ident_', 'order_id'), inplace=True)
+    od.reset_index(inplace=True)
+    od.set_index(('_ident_', 'order_id'), inplace=True)
+    data = pd.merge(sd, od, on=[('_ident_', 'order_id')], how='outer')
+    data.set_index([
+            ('_ident_', 'order_item_id'),
+            ('_ident_', 'product_id'),
+            ('_ident_', 'seller_id'),     
+            ('_ident_', 'customer_id'),
+            ('_ident_', 'sequential'),
+            ('_ident_', 'review_id'),
+        ],
+        append=True, inplace=True
+    )
+    return data
+
+
+# TODO : test métier de filtered copy avec ce cas :
+# j'ai obtenu un plantage avec (None, documented_products)
+def get_categorized_products(
+    categories_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    categorized_products = Cache.init(
+        'categorized_products',
+        _load_categorized_products
+    )
+    return filtered_copy(
+        categorized_products,
+        rows_filter=(categories_index, products_index)
+    )
+
+
+def get_products_sales(
+    orders_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    products_sales = Cache.init(
+        'products_sales',
+        _load_products_sales
+    )
+    return filtered_copy(
+        products_sales,
+        rows_filter=(orders_index, None, products_index)
+    )
+
+
+def get_sellers_sales(
+    orders_index: Optional[Iterable] = None,
+    sellers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    sellers_sales = Cache.init('sellers_sales', _load_sellers_sales)
+    return filtered_copy(
+        sellers_sales,
+        rows_filter=(orders_index, None, sellers_index)
+    )
+
+
+def get_sales(
+    orders_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None,
+    sellers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    sales = Cache.init('sales', _load_sales)
+    return filtered_copy(
+        sales,
+        rows_filter={('_ident_', 'order_id'): orders_index},
+        data_filter={
+            ('sales', 'product_id'): products_index,
+            ('sales', 'seller_id'): sellers_index
+        }
+    )
+
+
+def get_customers_orders_payments():
+    return _init_cache('customers_orders_payments').copy()
+
+
+def get_customers_orders_reviews():
+    return _init_cache('customers_orders_reviews').copy()
+
+
+def get_orders_payments_reviews():
+    return _init_cache('orders_payments_reviews').copy()
+
+
+def get_orders_reviews():
+    return _init_cache('orders_reviews').copy()
+
+
+def get_customers_orders():
+    return _init_cache('customers_orders').copy()
+
+
+def get_orders_payments():
+    return _init_cache('orders_payments').copy()
+
+
+def get_order_details():
+    return _init_cache('order_details').copy()
+
+
+def get_sales_details():
+    return _init_cache('sales_details').copy()
+
+
+def get_all_in_one():
+    return _init_cache('all_in_one').copy()
+
+
+"""def get_payment_types():
+    "" "Get the unique payment types in the order payments data table.
     Returns:
         numpy.ndarray: The unique payment types.
-    """
-    return _order_payments.payment_type.unique()
+    "" "
+    return _raw_order_payments.payment_type.unique()
+"""
 
 
-def get_merged_data():
-    """
+"""def get_merged_data_v1():
+    " ""
     Merge several data tables to create a comprehensive dataset.
+
+    DEPRECATED : use `get_all_in_one` instead
 
     Returns:
     pandas.DataFrame: The merged dataset.
-    """
+    "" "
     m = get_raw_order_items()
     m = pd.merge(m, get_raw_orders(), how='outer', on='order_id')
     m = pd.merge(m, get_raw_products(), how='outer', on='product_id')
@@ -390,11 +2366,22 @@ def get_merged_data():
     m = pd.merge(m, get_raw_customers(), how='outer', on='customer_id')
     m = pd.merge(m, get_raw_order_payments(), how='outer', on='order_id')
     m = pd.merge(m, get_raw_order_reviews(), how='outer', on='order_id')
-    return m
+    return m"""
 
 
-""" Unique customers
+""" Customer centric DB refactoring
+
+
+        TODO : à refactorer
+
+
 """
+
+
+def get_customer_order_counts(index=None):
+    """Get the customer order counts feature series."""
+    customers = get_customers_v1(index=index)
+    return customers.order_id.apply(len)
 
 
 def customer(customers, cu_id):
@@ -517,11 +2504,10 @@ def test_customer_locations():
 
 
 def get_unique_customers():
-    """
-    Get a DataFrame of unique customers and their locations.
+    """Get a DataFrame of unique customers and their locations.
 
     Returns:
-    pandas.DataFrame: A DataFrame of unique customers and their locations.
+        pandas.DataFrame: A DataFrame of unique customers and their locations.
     """
     return pd.DataFrame(
         get_raw_customers()
@@ -531,15 +2517,18 @@ def get_unique_customers():
     )
 
 
-def get_aggregated_order_payments():
-    """
-    Aggregate the order payments data table by order ID.
+""" Aggregating of payments (by order then by customer)
+"""
 
-    Returns:
-    pandas.DataFrame: The aggregated order payments data table.
-    """
+
+"""def get_aggregated_order_payments_v1():
+    "" "Aggregate the order payments data table by order ID.
+    DEPRECATED : used `get_order_payments_by_order` instead
+    "" "
     # Load the order payments data table
-    op = get_raw_order_payments()
+    op = get_raw_order_payments_v1()
+    op.payment_value = op.payment_value.astype(float)
+    op.payment_sequential = op.payment_sequential.astype(int)
 
     # Sort the data table by order ID and payment sequential number
     op = op.sort_values(
@@ -563,16 +2552,379 @@ def get_aggregated_order_payments():
         op_gpby.payment_value.apply(lambda x: sum(x))
     )
 
-    return op_gpby
+    return op_gpby"""
 
 
-""" Derived features
+"""def get_aggregated_order_payments_v2(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    "" "Aggregate the order payments data table by order ID.
+
+    DEPRECATED : used `get_order_payments_by_order` instead
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            raw data table by.
+
+    Returns:
+        pd.DataFrame: The order payments data table aggregated by order ID,
+            optionally filtered by the orders index.
+    "" "
+    op = get_raw_order_payments(orders_index=orders_index)
+    op.payment_value = op.payment_value.astype(float)
+    op.payment_sequential = op.payment_sequential.astype(int)
+
+    # Sort the data table by order ID and payment sequential number
+    op = op.sort_values(
+        by=['order_id', 'payment_sequential']
+    )
+
+    # Group the data table by order ID and aggregate the payment data
+    op_gpby = (
+        op
+        .groupby(by='order_id')
+        .aggregate(tuple)
+    )
+
+    # Add columns for the payment count and total value
+    op_gpby.insert(
+        0, 'count',
+        op_gpby.payment_sequential.apply(lambda x: len(x))
+    )
+    op_gpby.insert(
+        1, 'sum',
+        op_gpby.payment_value.apply(lambda x: sum(x))
+    )
+
+    op_gpby.columns.name = 'aggregated_order_payments'
+    op_gpby.columns = [
+        'count',
+        'sum',
+        'sequence',
+        'types',
+        'installments',
+        'values'
+    ]
+
+    return op_gpby"""
+
+
+"""def _load_cached_order_payments_by_order_v1():
+    "" "Aggregate the order payments data table by order ID.
+
+    Returns:
+        pd.DataFrame: The order payments data table aggregated by order ID
+    "" "
+    op = _expand_index(get_order_payments())
+    op.reset_index(1, inplace=True)
+
+    # Sort the data table by order ID and payment sequential number
+    op.sort_values(by=['order_id', 'sequential'], inplace=True)
+
+    # Group the data table by order ID and aggregate the payment data
+    op_by_o = op.groupby(by='order_id').aggregate(tuple)
+
+    # Add columns for the payment count and total value
+    op_by_o.insert(0, 'count', op_by_o.sequential.apply(len))
+    op_by_o.insert(1, 'sum', op_by_o.value.apply(sum))
+
+    op_by_o.columns.name = 'order_payments_by_order'
+
+    return op_by_o"""
+
+
+def _load_order_payments_by_order():
+    """Aggregate the order payments data table by order ID.
+
+    Returns:
+        pd.DataFrame: The order payments data table aggregated by order ID
+    """
+    cop = get_customers_orders_payments().reset_index()
+    cop = cop[[
+        ('_ident_', 'order_id'),
+        ('_ident_', 'customer_id'),
+        ('_ident_', 'sequential'),
+        ('orders', 'purchase_timestamp'),
+        ('payments', 'type'),
+        ('payments', 'installments'),
+        ('payments', 'value'),
+    ]]
+    cop.columns = [
+        'order_id', 'customer_id', 'sequential',
+        'purchase_date',
+        'type', 'installments', 'value'
+    ]
+    op_by_o = (
+        cop.groupby(by=['order_id', 'customer_id'])
+        .agg({
+            'value': ['count', 'sum', 'min', 'max', 'mean'],
+            'purchase_date': ['min', 'max'],
+            'sequential': tuple,
+            'type': tuple,
+            'installments': tuple
+        })
+    )
+    op_by_o.reset_index(1, inplace=True)
+    return op_by_o
+
+
+def get_order_payments_by_order(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Aggregate the order payments data table by order ID.
+
+    Args:
+        orders_index (iterable, optional): The orders index to filter the
+            raw data table by.
+
+    Returns:
+        pd.DataFrame: The order payments data table aggregated by order ID,
+            optionally filtered by the orders index.
+    """
+    data = Cache.init(
+        'order_payments_by_order',
+        _load_order_payments_by_order
+    )
+    return filtered_copy(data, rows_filter=orders_index)
+
+
+"""def get_customer_order_payments_v1():
+    "" "Get a DataFrame of customer, order and payment data.
+
+    DEPRECATED : use `get_order_payments_by_customer` instead
+    "" "
+    customers = get_raw_customers()[['customer_id', 'customer_unique_id']]
+    orders = get_raw_orders()[
+        ['order_id', 'customer_id', 'order_purchase_timestamp']
+    ]
+    "" "orders.order_purchase_timestamp = (
+        orders.order_purchase_timestamp
+        .astype('datetime64[ns]')
+    )"" "
+    agg_order_payments = get_aggregated_order_payments_v1()[['payment_total']]
+    m = pd.merge(customers, orders, how='outer', on='customer_id')
+    m = pd.merge(m, agg_order_payments, how='outer', on='order_id')
+    m = m.sort_values(by='order_purchase_timestamp', ascending=False)
+    m = m.drop(columns=['customer_id'])
+    m = m.set_index('order_id')
+    return m"""
+
+
+"""def _load_cached_order_payments_by_customer_v1():
+    cop = get_customers_orders_payments().reset_index()
+    cop = cop[[
+        ('_ident_', 'customer_id'),
+        ('orders', 'purchase_timestamp'),
+        ('payments', 'value')
+    ]]
+
+    cop.columns = ['customer_id', 'purchase_date', 'value']
+
+    op_by_c = (
+        cop.groupby('customer_id')
+        .agg({
+            'value': ['count', 'sum', 'min', 'max', 'mean'],
+            'purchase_date': ['min', 'max']
+        })
+    )
+
+    return op_by_c"""
+
+
+def _load_order_payments_by_customer():
+    op_by_o = get_order_payments_by_order()
+    op_by_o.reset_index(inplace=True)
+
+    op_by_c = op_by_o.groupby(by='customer_id').agg({
+        ('order_id', ''): tuple,
+        ('value', 'count'): ['count', 'sum'],
+        ('value', 'sum'): ['sum', 'min', 'max', 'mean'],
+        ('purchase_date', 'min'): 'min',
+        ('purchase_date', 'max'): 'max',
+        ('sequential', 'tuple'): tuple,
+        ('type', 'tuple'): tuple,
+        ('installments', 'tuple'): tuple
+    })
+
+    op_by_c.columns = [
+        'order_id_tuple', 'orders_count',
+        'payments_count', 'payments_total',
+        'order_payment_min', 'order_payment_max', 'order_payment_mean',
+        'first_purchase_date', 'last_purchase_date',
+        'sequentials_tuple', 'types_tuple', 'installments_tuple'
+    ]
+
+    return op_by_c
+
+
+def get_order_payments_by_customer(
+    customers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    data = Cache.init(
+        'order_payments_by_customer',
+        _load_order_payments_by_customer
+    )
+    return filtered_copy(data, rows_filter=customers_index)
+
+
+""" By date filtering
 """
 
 
-def get_order_times():
+def get_last_order_date_v1():
+    """Get the last order date.
+    DEPRECATED
+    """
+    return (
+        get_raw_orders()
+        .order_purchase_timestamp
+        .astype('datetime64[ns]')
+        .max()
+    )
+
+
+def get_first_order_date_v1():
+    """Get the first order date.
+    DEPERECATED
+    """
+    return (
+        get_raw_orders()
+        .order_purchase_timestamp
+        .astype('datetime64[ns]')
+        .min()
+    )
+
+
+def _event_col(
+    event: str
+) -> str:
+    events_dict = {
+        'purchase': 'purchase_timestamp',
+        'approval': 'approved_at',
+        'carrier_delivery': 'delivered_carrier_date',
+        'customer_delivery': 'delivered_customer_date',
+        'estimated_delivery': 'estimated_delivery_date'
+    }
+    if event is None:
+        return events_dict['purchase']
+    if event in events_dict:
+        return events_dict[event]
+    return ''
+
+
+def get_first_order_date(
+    orders_index: Optional[Iterable] = None,
+    event: Optional[str] = None
+) -> datetime:
+    """Get the first order date.
+    """
+    return get_orders(orders_index)[_event_col(event)].min()
+
+
+def get_last_order_date(
+    orders_index: Optional[Iterable] = None,
+    event: Optional[str] = None
+) -> datetime:
+    """Get the last order date.
+    """
+    return get_orders(orders_index)[_event_col(event)].max()
+
+
+def get_order_ages_v0(now):
+    """Get the ages of all orders at a given time.
+
+    DEPRECATED
+
+    Args:
+        now (datetime): The reference time for calculating the ages.
+
+    Returns:
+        Series: A Series with the order ages, indexed by order id.
+    """
+    return now - (
+        get_raw_orders()
+        .set_index('order_id')
+        .order_purchase_timestamp
+        .astype('datetime64[ns]')
+        .sort_values(ascending=False)
+        .rename('order_age')
+    )
+
+
+def get_order_ages_v1(
+        from_date=get_first_order_date(),
+        to_date=get_last_order_date()
+):
+    """
+    Return the age of orders placed between the given
+    `from_date` and `to_date` dates.
+    If no dates are given, the function will use
+    the first and last order dates in the orders table.
+    """
+    ord = get_raw_orders()
+    is_ord_between = (
+        (from_date <= ord.order_purchase_timestamp)
+        & (ord.order_purchase_timestamp <= to_date)
+    )
+    ordb = ord[is_ord_between]
+    return to_date - (
+        ordb
+        .set_index('order_id')
+        .order_purchase_timestamp
+        .astype('datetime64[ns]')
+        .sort_values(ascending=False)
+        .rename('order_age')
+    )
+
+
+def get_order_event_ages(
+    present_date: Optional[datetime] = datetime.now(),
+    orders_index: Optional[Iterable] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    event: Optional[str] = None
+) -> pd.Series:
+    """
+    Return the age of orders placed between the given
+    `from_date` and `to_date` dates.
+    If no dates are given, the function will use
+    the first and last order dates in the orders table.
+    """
+    orders = get_orders(orders_index=orders_index)
+
+    if from_date is None:
+        from_date = get_first_order_date(
+            orders_index=orders_index,
+            event=event
+        )
+
+    if to_date is None:
+        to_date = get_last_order_date(
+            orders_index=orders_index,
+            event=event
+        )
+
+    event_dates = orders[_event_col(event)]
+
+    between_dates = (
+        (from_date <= event_dates)
+        & (event_dates <= to_date)
+    )
+
+    event_dates = event_dates[between_dates]
+
+    return (present_date - event_dates).sort_values(ascending=False)
+
+
+""" Derived features : order times
+"""
+
+
+def get_order_times_v0():
     """
     Get a DataFrame of order time data.
+
+    DEPRECATED
 
     Returns:
     pandas.DataFrame: A DataFrame of order time data.
@@ -607,103 +2959,107 @@ def get_order_times():
     ], axis=1)
 
 
-def get_customer_order_payment():
+def get_order_times_v1(index=None):
+    """Get a DataFrame of order times data.
+
+    DEPRECATED
     """
-    Get a DataFrame of customer, order and payment data.
+    orders = get_orders(index=index)
+    return pd.concat([
+        orders.status,
+        (
+            orders.delivered_customer_date
+            - orders.purchase_timestamp
+        ).rename('processing_times'),
+        (
+            orders.estimated_delivery_date
+            - orders.purchase_timestamp
+        ).rename('processing_estimated_times'),
+        (
+            orders.estimated_delivery_date
+            - orders.delivered_customer_date
+        ).rename('delivery_advance_times'),
+        (
+            orders.approved_at
+            - orders.purchase_timestamp
+        ).rename('approval_times'),
+        (
+            orders.delivered_carrier_date
+            - orders.approved_at
+        ).rename('carrier_delivery_times'),
+        (
+            orders.delivered_customer_date
+            - orders.delivered_carrier_date
+        ).rename('customer_delivery_times'),
+    ], axis=1)
 
-    Returns:
-    pandas.DataFrame: A DataFrame of customer, order and payment data.
+
+def get_order_times(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    """Get a DataFrame of order times data.
     """
-    customers = get_raw_customers()[['customer_id', 'customer_unique_id']]
-    orders = get_raw_orders()[
-        ['order_id', 'customer_id', 'order_purchase_timestamp']
-    ]
-    orders.order_purchase_timestamp = (
-        orders.order_purchase_timestamp
-        .astype('datetime64[ns]')
-    )
-    agg_order_payments = get_aggregated_order_payments()[['payment_total']]
-    m = pd.merge(customers, orders, how='outer', on='customer_id')
-    m = pd.merge(m, agg_order_payments, how='outer', on='order_id')
-    m = m.sort_values(by='order_purchase_timestamp', ascending=False)
-    m = m.drop(columns=['customer_id'])
-    m = m.set_index('order_id')
-    return m
+    orders = get_orders(orders_index=orders_index)
+
+    def time_diff(data, from_date, to_date, name):
+        return (data[to_date] - data[from_date]).rename(name)
+
+    t1 = 'purchase_timestamp'
+    t2 = 'approved_at'
+    t3 = 'delivered_carrier_date'
+    t4 = 'delivered_customer_date'
+    t5 = 'estimated_delivery_date'
+
+    dt12 = 'approval_time'
+    dt13 = 'carrier_delivering_time'
+    dt14 = 'customer_delivering_time'
+    dt15 = 'processing_estimated_time'
+    dt23 = 'approval_to_carrier_delivery_time'
+    dt24 = 'approval_to_customer_delivery_time'
+    dt25 = 'approval_to_estimated_delivery_time'
+    dt34 = 'transit_time'
+    dt35 = 'estimated_transit_time'
+    dt45 = 'delivery_advance_time'
+
+    return pd.concat([
+        time_diff(orders, t1, t2, dt12),
+        time_diff(orders, t1, t3, dt13),
+        time_diff(orders, t1, t4, dt14),
+        time_diff(orders, t1, t5, dt15),
+        time_diff(orders, t2, t3, dt23),
+        time_diff(orders, t2, t4, dt24),
+        time_diff(orders, t2, t5, dt25),
+        time_diff(orders, t3, t4, dt34),
+        time_diff(orders, t3, t5, dt35),
+        time_diff(orders, t4, t5, dt45),
+    ], axis=1)
 
 
-def get_last_order_date():
-    """Get the last order date.
-    """
-    return (
-        get_raw_orders()
-        .order_purchase_timestamp
-        .astype('datetime64[ns]')
-        .max()
-    )
+""" Derived features : R, F, M
+"""
 
 
-def get_first_order_date():
-    """Get the first order date.
-    """
-    return (
-        get_raw_orders()
-        .order_purchase_timestamp
-        .astype('datetime64[ns]')
-        .min()
-    )
+def _index_args(kwargs: dict) -> dict:
+    return {
+        k: v for k, v in kwargs.items()
+        if k.endswith('_index')
+    }
 
 
-def get_order_ages(now):
-    """Get the ages of all orders at a given time.
-
-    Args:
-        now (datetime): The reference time for calculating the ages.
-
-    Returns:
-        Series: A Series with the order ages, indexed by order id.
-    """
-    return now - (
-        get_raw_orders()
-        .set_index('order_id')
-        .order_purchase_timestamp
-        .astype('datetime64[ns]')
-        .sort_values(ascending=False)
-        .rename('order_age')
-    )
+def _event_dating_args(kwargs: dict) -> dict:
+    dating_args = ['present_date', 'from_date', 'to_date', 'event']
+    return {
+        k: v for k, v in kwargs.items()
+        if k in dating_args
+    }
 
 
-def get_order_ages_2(
+def get_customer_order_recency_v1(
         from_date=get_first_order_date(),
         to_date=get_last_order_date()
 ):
-    """
-    Return the age of orders placed between the given
-    `from_date` and `to_date` dates.
-    If no dates are given, the function will use
-    the first and last order dates in the orders table.
-    """
-    ord = get_raw_orders()
-    is_ord_between = (
-        (from_date <= ord.order_purchase_timestamp)
-        & (ord.order_purchase_timestamp <= to_date)
-    )
-    ordb = ord[is_ord_between]
-    return to_date - (
-        ordb
-        .set_index('order_id')
-        .order_purchase_timestamp
-        .astype('datetime64[ns]')
-        .sort_values(ascending=False)
-        .rename('order_age')
-    )
-
-
-def get_customer_order_recency(
-        from_date=get_first_order_date(),
-        to_date=get_last_order_date()
-):
-    cop = get_customer_order_payment()
-    order_age = get_order_ages(get_last_order_date())
+    cop = get_customer_order_payments_v1()
+    order_age = get_order_ages_v1(get_last_order_date())
     copa = pd.concat([cop, order_age], axis=1)
     is_copa_between = (
         (from_date <= copa.order_purchase_timestamp)
@@ -714,6 +3070,30 @@ def get_customer_order_recency(
     customer_recency = copab.drop_duplicates(subset='customer_unique_id')
     customer_recency = customer_recency.set_index('customer_unique_id')
     return customer_recency
+   
+
+"""def get_customer_order_recency(
+    customers_index: Optional[Iterable] = None,
+    orders_index: Optional[Iterable] = None,
+    present_date: Optional[datetime] = datetime.now(),
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    event: Optional[str] = None
+) -> pd.DataFrame:
+
+    kwargs = locals()
+    customer_payments = get_customer_payments(_index_args(kwargs))
+    order_ages = get_order_event_ages(_event_dating_args(kwargs))
+
+    event_dates = orders[_event_col(event)]
+
+    between_dates = (
+        (from_date <= event_dates)
+        & (event_dates <= to_date)
+    )
+
+    event_dates = event_dates[between_dates]"""
+
 
 
 def get_customer_order_freqs_and_amount(
@@ -735,7 +3115,7 @@ def get_customer_order_freqs_and_amount(
     The `from_date` and `to_date` parameters must be strings
     in the ISO 8601 format, such as "2022-12-18".
     """
-    cop = get_customer_order_payment()
+    cop = get_customer_order_payments_v1()
     is_cop_between = (
         (from_date <= cop.order_purchase_timestamp)
         & (cop.order_purchase_timestamp <= to_date)
@@ -765,7 +3145,7 @@ def get_customer_RFM(
     A dataframe with columns ['R', 'F', 'M']
     containing the RFM values for each customer.
     """
-    cor = get_customer_order_recency(from_date, to_date)
+    cor = get_customer_order_recency_v1(from_date, to_date)
     cofa = get_customer_order_freqs_and_amount(from_date, to_date)
     crfm = pd.merge(
         cor[['order_age']], cofa,
@@ -777,8 +3157,10 @@ def get_customer_RFM(
     return crfm
 
 
-def get_product_physical_features(index=None):
-    products = get_products(index=index)
+def get_product_physical_features(
+    products_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    products = get_products(products_index=products_index)
     volume = (
         products.length_cm
         * products.height_cm
@@ -790,7 +3172,7 @@ def get_product_physical_features(index=None):
     return pd.concat([volume, density], axis=1)
 
 
-""" Plots
+""" Plotting
 """
 
 
@@ -1569,7 +3951,6 @@ def scrap_brazil_municipalities():
     all['is_state_capital'] = is_state_capital
     fixed_names = all.Municipality.str[:-len(' (State Capital)')]
     all.loc[is_state_capital, 'Municipality'] = fixed_names
-    #st_capital_name =  if cities.str.endswith('(State Capital)') else cities
     return all
 
 
@@ -1662,7 +4043,7 @@ def get_states_encoding_table():
     return states
 
 
-def load_brazil_zip_codes_compl():
+def load_brazil_zip_codes_compl_v1():
 
     def zip_range_extract(x):
         return x[1:10], x[11:-1]
@@ -1675,14 +4056,54 @@ def load_brazil_zip_codes_compl():
 
     # Feature engineering
     zips.columns.name = 'zip_codes_compl'
-    zips = zips.drop(columns=['creation', 'extinction', 'notes'])  # rmv cst cols
+
+    # Drop constant columns
+    zips = zips.drop(
+        columns=['creation', 'extinction', 'notes']
+    )
     # zips = zips.apply(lambda x: x.str.strip() if x.dtype == 'object' else x)
     zip_ranges = zips.postalCode_ranges
     zips.postalCode_ranges = zip_ranges.apply(zip_range_extract)
     return zips
 
 
-def get_zip_ranges_table():
+def load_brazil_zip_codes_compl():
+    # Load the CSV file with the Brazilian zip code information
+    zips = pd.read_csv(
+        f'../data/datasets_BR/br-city-codes.csv',
+        dtype=object
+    )
+
+    # Replace the separator "] [" with "☗"
+    zips['postalCode_ranges'] = (
+        zips['postalCode_ranges']
+        .str.replace(r'] [', '☗', regex=False)
+    )
+
+    # Remove the leading "[" and trailing "]"
+    zips['postalCode_ranges'] = zips['postalCode_ranges'].str[1:-1]
+
+    # Split the postalCode_ranges column into a list of ranges
+    zips['postalCode_ranges'] = zips['postalCode_ranges'].str.split('☗')
+
+    # Explode the postalCode_ranges column
+    # to duplicate rows with multiple ranges
+    zips = zips.explode('postalCode_ranges')
+
+    # Remove excess characters from the postal code ranges
+    def extract_codes(x):
+        return x[:9], x[10:]
+
+    zips['postalCode_ranges'] = zips['postalCode_ranges'].apply(extract_codes)
+
+    # Remove empty columns
+    zips = zips.drop(columns=['creation', 'extinction', 'notes'])
+    zips.columns.name = 'zip_codes_compl'
+
+    return zips
+
+
+def get_zip_ranges():
 
     def expand_zip_range(s):
         return (
@@ -1703,14 +4124,127 @@ def get_zip_ranges_table():
     return zip_ranges
 
 
+def get_zip_ranges_holes_table(ranges=None):
+    """Lists 'holes' in the list of postcode ranges.
+    """
+    if ranges is None:
+        ranges = get_zip_ranges()
+
+    ranges['gap_before'] = (
+        ranges.range_from.astype(float)
+        - ranges.range_to.astype(float).shift(1) - 1
+    )
+
+    ranges['gb_from'] = ranges['gb_to'] = np.nan
+
+    has_gap_before = ranges.gap_before > 0
+
+    preceded_by_gap = ranges[has_gap_before]
+
+    ranges.loc[has_gap_before, 'gb_from'] = (
+        preceded_by_gap.range_from.astype(float)
+        - preceded_by_gap.gap_before
+    ).map(lambda x: f'{int(x):05d}')
+
+    ranges.loc[has_gap_before, 'gb_to'] = (
+        preceded_by_gap.range_from.astype(float)
+        - 1
+    ).map(lambda x: f'{int(x):05d}')
+
+    ranges['gap_after'] = (
+        ranges.range_from.shift(-1).astype(float)
+        - ranges.range_to.astype(float) - 1
+    )
+
+    ranges['ga_from'] = ranges['ga_to'] = np.nan
+
+    has_gap_after = ranges.gap_after > 0
+
+    followed_by_gap = ranges[has_gap_after]
+
+    ranges.loc[has_gap_after, 'ga_from'] = (
+        followed_by_gap.range_to.astype(float)
+        + 1
+    ).map(lambda x: f'{int(x):05d}')
+
+    ranges.loc[has_gap_after, 'ga_to'] = (
+        followed_by_gap.range_to.astype(float)
+        + followed_by_gap.gap_after
+    ).map(lambda x: f'{int(x):05d}')
+
+    gap_ranges_before = ranges[ranges.gap_before > 0]
+    gap_ranges_before = gap_ranges_before[[
+        'gb_from', 'gb_to', 'name', 'state', 'range_from', 'range_to'
+    ]]
+    gap_ranges_before.columns = [
+        'from', 'to', 'after_name', 'after_state', 'after_from', 'after_to'
+    ]
+
+    gap_ranges_after = ranges[ranges.gap_after > 0]
+    gap_ranges_after = gap_ranges_after[[
+        'ga_from', 'ga_to', 'name', 'state', 'range_from', 'range_to'
+    ]]
+    gap_ranges_after.columns = [
+        'from', 'to', 'before_name', 'before_state', 'before_from', 'before_to'
+    ]
+
+    gap_merged = pd.merge(
+        gap_ranges_after,
+        gap_ranges_before,
+        on=['from', 'to']
+    )
+
+    states_equal = gap_merged.before_state == gap_merged.after_state
+
+    gap_merged_short = gap_merged[['from', 'to']].copy()
+    gap_merged_short['state'] = gap_merged.before_state.where(
+        states_equal,
+        gap_merged.before_state + '_' + gap_merged.after_state
+    )
+    gap_merged_short['before_name'] = gap_merged.before_name
+    gap_merged_short['after_name'] = gap_merged.after_name
+
+    return gap_merged_short
+
+
+def get_zip_gap_ranges(gap_merged_short=None):
+    """hack to use get_names on unsolved cases.
+    """
+    if gap_merged_short is None:
+        gap_merged_short = get_zip_ranges_holes_table()
+
+    gap_ranges = pd.concat(
+        [
+            gap_merged_short[['from', 'to']],
+            gap_merged_short[
+                ['state', 'before_name', 'after_name']
+            ].apply(tuple, axis=1).rename('name')
+        ], axis=1
+    )
+
+    gap_ranges.columns = ['range_from', 'range_to', 'name']
+
+    return gap_ranges
+
+
 """ Geolocations cleaning
 """
 
-def get_zcs_reduction(data):
-    zcs_cols = ['zip_code_prefix', 'city', 'state']
-    data_zcs = data[zcs_cols]
+
+def get_zcs_reduction(data: pd.DataFrame) -> pd.DataFrame:
+    """Returns a reduced version of the given zip-codes-states data table,
+    containing only the columns 'zip_code_prefix', 'city', and 'state', with
+    duplicates removed.
+
+    Args:
+        data (pd.DataFrame): The zip-codes-states data table to reduce.
+
+    Returns:
+        pd.DataFrame: A reduced version of the input data table, with
+        duplicates removed.
+    """
     return (
-        data_zcs
+        data[['zip_code_prefix', 'city', 'state']]
         .drop_duplicates()
         .reset_index(drop=True)
     )
@@ -1742,7 +4276,17 @@ def get_names_v1(zip_codes, zip_ranges_table):
     )
 
 
-def get_names(zip_codes, ranges):
+def resolve_names(zip_codes: pd.Series, ranges: pd.DataFrame) -> pd.Series:
+    """Resolves city names for the given zip codes using the given zip ranges.
+
+    Args:
+        zip_codes (pd.Series): The zip codes to resolve city names for.
+        ranges (pd.DataFrame): The zip ranges data frame containing at least
+            'range_from', 'range_to', and 'name' columns.
+
+    Returns:
+        pd.Series: The city names corresponding to the given zip codes.
+    """
     # Sort zip_codes in ascending order
     zip_codes = zip_codes.sort_values()
 
@@ -1776,11 +4320,224 @@ def get_names(zip_codes, ranges):
             names += [np.nan]
 
     # Return the series of names with the same index as the input zip_codes
-    names = pd.Series(names, index=zip_codes.index, name='names')
+    names = pd.Series(names, index=zip_codes.index, name='names', dtype=object)
 
     # Sort the names by index
     names = names.sort_index()
     return names
+
+
+def normalize_city_names_v1(raw_zcs_table: pd.DataFrame) -> pd.DataFrame:
+    """Returns the raw zip-code-city-state table with normalized city names.
+
+    Args:
+        raw_zcs_table (pd.DataFrame): The raw zip-code-city-state table.
+
+    Returns:
+        pd.DataFrame: The raw zip-code-city-state table with normalized
+        city names.
+    """
+    # Reduce the table to only the zip_code_prefix, city and state columns
+    raw_zcs_part = get_zcs_reduction(raw_zcs_table)
+
+    # Load the zip ranges table
+    zip_ranges_table = get_zip_ranges()
+
+    # Add the municipality column with resolved names and NaN otherwise
+    raw_zcs_part['municipality'] = resolve_names(
+        raw_zcs_part.zip_code_prefix,
+        zip_ranges_table
+    )
+
+    # Process unresolved rows
+    unresolved_rows = raw_zcs_part.municipality.isna()
+    if unresolved_rows.sum() > 0:
+        # Load the zip gap ranges table
+        gap_ranges = get_zip_gap_ranges()
+
+        # Get unresolved rows
+        unresolved_raw_zcs_part = raw_zcs_part[unresolved_rows]
+
+        # Remove the municipality column and add a new one
+        unresolved_raw_zcs_part = unresolved_raw_zcs_part.drop(
+            columns='municipality'
+        )
+        unresolved_raw_zcs_part['municipality'] = resolve_names(
+            unresolved_raw_zcs_part.zip_code_prefix,
+            gap_ranges
+        )
+        raw_zcs_part.loc[unresolved_rows, 'municipality'] = (
+            unresolved_raw_zcs_part.city.str.title()
+            + '@'
+            + unresolved_raw_zcs_part.municipality.apply(
+                lambda x: '[' + x[1] + '(' + x[0] + ')' + x[2] + ']'
+            )
+        )
+
+    # Intégration des résultats : merge pour compléter raw_zcs_table avec la
+    # colonne municipality
+    raw_zcs_table_normalized = pd.merge(
+        raw_zcs_table,
+        raw_zcs_part,
+        on=['zip_code_prefix', 'city', 'state']
+    )
+
+    raw_zcs_table_normalized.city = raw_zcs_table_normalized.municipality
+    raw_zcs_table_normalized = raw_zcs_table_normalized.drop(
+        columns='municipality'
+    )
+    raw_zcs_table_normalized.index.name = raw_zcs_table.index.name
+
+    return raw_zcs_table_normalized
+
+
+def assert_data_schema(data: pd.DataFrame, schema_cols: List[str]) -> None:
+    """Checks that the given data table has the expected columns.
+
+    Args:
+        data (pd.DataFrame): The data table to check.
+        schema_cols (List[str]): The expected columns of the data table.
+
+    Raises:
+        ValueError: If the data table does not have the expected columns.
+    """
+    real_cols = list(data.columns)
+    data_name = data.columns.name
+    ok = True
+    for col in schema_cols:
+        ok = ok and (col in real_cols)
+    if not ok:
+        raise ValueError(f'{data_name} must have columns {str(schema_cols)}')
+
+
+def resolve_names_outof_zip_range(
+    unresolved_zcs: pd.DataFrame,
+    zip_gap_ranges: Optional[pd.DataFrame] = None
+) -> None:
+    """Resolves city names for zip codes that fall in a gap between zip ranges.
+
+    Args:
+        unresolved_zcs (pd.DataFrame): The data frame containing unresolved
+            city names and their corresponding zip codes, states, and zip
+            gap ranges. This data frame should have at least 'zip_code_prefix',
+            'city', and 'state' columns.
+        zip_gap_ranges (pd.DataFrame, optional): The zip gap ranges table to
+            use for resolving city names. This table should contain at least
+            'range_from', 'range_to', and 'name' columns. If not provided, the
+            `get_zip_gap_ranges` function will be called to retrieve it.
+
+    Returns:
+        pd.DataFrame: The data frame with the city names resolved and
+            formatted as
+            'CITY@[CITY_BEFORE(STATE_BEFORE[_STATE_AFTER])CITY_AFTER]'.
+    """
+    # Load the zip gap ranges table if it is not provided
+    if zip_gap_ranges is None:
+        zip_gap_ranges = get_zip_gap_ranges()
+
+    # Assure that the zip_ranges DataFrame has the expected columns
+    assert_data_schema(zip_gap_ranges, ['range_from', 'range_to', 'name'])
+
+    # Add the 'municipality' column with names from the gap ranges table
+    resolved_names = resolve_names(
+        unresolved_zcs.zip_code_prefix,
+        zip_gap_ranges
+    )
+
+    # Format the unresolved city names as
+    # 'CITY@[CITY_BEFORE(STATE_BEFORE[_STATE_AFTER])CITY_AFTER]'
+    return (
+        unresolved_zcs.city.str.title()
+        + '@'
+        + resolved_names.apply(
+            lambda x: '[' + x[1] + '(' + x[0] + ')' + x[2] + ']'
+        )
+    )
+
+
+def normalize_city_names(
+    zcs_data: pd.DataFrame,
+    zip_ranges: Optional[pd.DataFrame] = None,
+    zip_gap_ranges: Optional[pd.DataFrame] = None,
+) -> None:
+    """Normalizes city names in the given zip-city-state data table.
+
+    Args:
+        zcs_data (pd.DataFrame): The zip-city-state data table to
+            normalize.
+        zip_ranges (pd.DataFrame, optional): The zip ranges table to use
+            for resolving city names. This table should contain at least
+            'range_from', 'range_to', and 'name' columns. If not provided, the
+            `get_zip_ranges_table` function will be called to retrieve it.
+        zip_gap_ranges (pd.DataFrame, optional): The zip gap ranges table to
+            use for resolving city names for zip codes that fall in a gap
+            between zip ranges. This table should contain at least
+            'range_from', 'range_to', and 'name' columns. If not provided, the
+            `get_zip_gap_ranges` function will be called to retrieve it.
+
+    Returns:
+        None: This function modifies the `zcs_data` DataFrame inplace.
+    """
+    # Assure that the zcs_data DataFrame has the expected columns
+    assert_data_schema(zcs_data, ['zip_code_prefix', 'city', 'state'])
+
+    # Reduce the raw_zcs_table to the zip_code_prefix, city, and state columns
+    # and remove duplicates
+    zcs = get_zcs_reduction(zcs_data)
+
+    # Load the zip ranges table if it is not provided
+    if zip_ranges is None:
+        zip_ranges = get_zip_ranges()
+
+    # Assure that the zip_ranges DataFrame has the expected columns
+    assert_data_schema(zip_ranges, ['range_from', 'range_to', 'name'])
+
+    # Add the municipality column with resolved names and `NA` for unresolved
+    # names
+    zcs['new_city'] = resolve_names(
+        zcs.zip_code_prefix,
+        zip_ranges
+    )
+
+    # Process unresolved rows
+    unresolved_rows = zcs.new_city.isna()
+
+    # If there are unresolved rows
+    if unresolved_rows.sum() > 0:
+        # Format the unresolved city names as
+        # 'CITY@[CITY_BEFORE(STATE_BEFORE[STATE_AFTER])CITY_AFTER]'
+        zcs.loc[unresolved_rows, 'new_city'] = (
+            resolve_names_outof_zip_range(
+                zcs[unresolved_rows],
+                zip_gap_ranges
+            )
+        )
+
+    # Save the pk-index (primary key index) by resetting the index
+    zcs_data.reset_index(inplace=True)
+
+    # Create a positional index by resetting the index again
+    zcs_data.reset_index(inplace=True)
+
+    # Merge the normalized city names into the original `zcs_data` dataframe
+    new_zcs_data = pd.merge(
+        zcs_data,
+        zcs,
+        on=['zip_code_prefix', 'city', 'state']
+    )
+
+    # Sort `new_zcs_data` by the positional index
+    # to align with the original order of `zcs_data`
+    new_zcs_data.sort_values(by='index', inplace=True)
+
+    # Reset the original index of `zcs_data`
+    zcs_data.set_index(zcs_data.columns[1], inplace=True)
+
+    # Drop the positional index column
+    zcs_data.drop(columns='index', inplace=True)
+
+    # Overwrite the city column in `zcs_data` with the normalized city names
+    zcs_data.city = new_zcs_data.new_city.values
 
 
 """ Entities and Relationships analysis

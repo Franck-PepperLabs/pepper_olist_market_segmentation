@@ -46,6 +46,14 @@ TiB = GiB * KiB
 
 
 def format_iB(n_bytes):
+    """AI is creating summary for format_iB
+
+    Args:
+        n_bytes ([type]): [description]
+
+    Returns:
+        [type]: [description]
+    """
     if n_bytes < KiB:
         return n_bytes, 'iB'
     elif n_bytes < MiB:
@@ -137,7 +145,7 @@ def gini(v):
 
 
 # TODO : gini est plutôt utilisé pour la distribution continue
-# Pour la distribution catégorielle, c'est plutôt le chi2 et l'entreprie
+# Pour la distribution catégorielle, c'est plutôt le chi2 et l'entroprie
 def empirical_dist_gini(v):
     return gini(v.value_counts())
 
@@ -192,8 +200,9 @@ def discrete_stats(data, name=None):
         'n': n,
         'n_u': n_u,
         'n_na': n_na,
-        'fr': n / (n + n_na),
-        'vr': n_u / n,
+        'Filling rate': n / (n + n_na),
+        'Shannon entropy': n_u / n,
+        'dtypes': data.dtypes
     }, index=data.columns)
     if name is not None:
         stats.index.names = [name]

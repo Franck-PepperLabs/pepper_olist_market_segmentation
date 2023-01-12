@@ -1105,7 +1105,9 @@ def _get_mask(
             # Get the column name or index corresponding to the current key
             name = k if by_name else _data.columns[k]
             # Extract the sub-DataFrame from the original data
-            sub_data = expand_series_in_dataframe(_data[name])
+            sub_data = _data[name]
+            if isinstance(sub_data, pd.Series):
+                sub_data = expand_series_in_dataframe(_data[name])
             # Recursively apply the selector on the sub-DataFrame
             mask = _get_mask(sub_data, sub_selector, by_name, mask)
         # If the value is not a dictionary, it means we need to apply the
@@ -1228,7 +1230,7 @@ class PandasSelector:
             if is_single(x):
                 return str(x)
             else:
-                return str(list(x))
+                return str(x)
         return json.dumps(
             self.data,
             indent=2,
@@ -1336,17 +1338,22 @@ class PandasSelector:
             elif isinstance(obj, tuple):
                 # composite filter inserted
                 data[key] = cls.parse(list(obj))
+            elif isinstance(obj, list):
+                # composite filter inserted
+                data[key] = nest_named_arrays(obj)
             elif PandasVector.is_vector(obj):
                 # filter inserted. Names prefixed with key_, key if unamed
                 column = PandasVector.parse(obj)
-                part = column.as_by_name_filter(prefix=key)
-                data.update(part)
+                part = column.as_by_name_filter()  # prefix=key)
+                # data.update(part)
+                data[key] = part
             elif PandasMatrix.is_matrix(obj):
                 # all filters inserted with key_ as common prefix
                 # and key=1, ... key_n if unamed matrix
                 matrix = PandasMatrix.parse(obj)
-                part = matrix.as_by_name_selector(prefix=key)
-                data.update(part)
+                part = matrix.as_by_name_selector()   # prefix=key)
+                # data.update(part)
+                data[key] = part
             else:
                 raise TypeError(f"Unkown raw selector type {type(obj)}")
         return cls(data, True)
@@ -1532,8 +1539,9 @@ class PandasVector:
     def is_list_of_singles(self) -> list:
         return list(self.data)
 
-    def as_by_name_filter(self, prefix):
-        return {f"{prefix}_{self.name}": self.unique().data}
+    def as_by_name_filter(self, prefix=None):
+        key = self.name if prefix is None else f"{prefix}_{self.name}"
+        return {key: self.unique().data}
 
     def as_by_position_filter(self, pos):
         return {pos: self.unique().data}
@@ -1876,7 +1884,7 @@ class PandasMatrix:
         # Rename the columns
         self.data.rename(columns=new_names, inplace=True)
 
-    def as_by_name_selector(self, prefix='') -> Dict[str, Any]:
+    def as_by_name_selector(self, prefix=None) -> Dict[str, Any]:
         """Return a dictionary of filters with keys as column names.
 
         The keys are prefixed with the given prefix.
@@ -1893,7 +1901,7 @@ class PandasMatrix:
             self.repair_naming()
         filters = {}
         for name, series in self.items():
-            key = f'{prefix}_{name}'
+            key = name if prefix is None else f'{prefix}_{name}'
             filters[key] = series.to_numpy()
         return filters
 

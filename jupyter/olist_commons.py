@@ -4,7 +4,6 @@ for a e-commerce dataset.
 """
 
 from typing import *
-import re
 from sys import getsizeof
 from datetime import *
 import time
@@ -89,178 +88,6 @@ _cached_order_payments = None
 _cached_order_reviews = None
 _cached_product_categories = None
 _cached_geolocations = None
-
-
-# globals for pk-indexed merged tables caching
-_cached_categorized_products = None
-_cached_products_sales = None
-_cached_sellers_sales = None
-_cached_sales = None
-
-_cached_orders_reviews = None
-_cached_customers_orders = None
-_cached_orders_payments = None
-
-_cached_customers_orders_payments = None
-_cached_customers_orders_reviews = None
-_cached_orders_payments_reviews = None
-
-_cached_order_details = None
-_cached_sales_details = None
-
-_cached_all_in_one = None
-
-# _cached_order_payments_by_order = None
-# _cached_order_payments_by_customer = None
-
-
-def _is_identifier(identifier: str) -> bool:
-    return re.search('^[A-Za-z_][A-Za-z0-9_]*', identifier)
-
-
-def _set_global_variable(var_name: str, value):
-    """
-    Set a global variable with the given name and value.
-
-    Parameters:
-        - var_name (str): The name of the variable to set.
-            The variable name must be a non-empty string containing
-            only alphanumeric characters.
-        - value: The value to set the variable to.
-
-    Raises:
-        - ValueError: if `var_name` is not a valid string
-        - NameError: if a variable with the given `var_name` does not exist
-            in the global scope
-    """
-    if not (isinstance(var_name, str) and _is_identifier(var_name)):
-        raise ValueError(f"`var_name` {var_name} is not a valid identifier")
-    if var_name in globals():
-        globals()[var_name] = value
-    else:
-        raise NameError(f"`var_name` {var_name} not found in globals")
-
-
-def _get_cache(table_name: str) -> Union[pd.DataFrame, None]:
-    """
-    Get the cache of a table.
-
-    Parameters:
-        - table_name (str): The name of the table.
-            The table name must be a non-empty string.
-
-    Returns:
-        - Union[pd.DataFrame, None]: The cache of the table if it exists
-            and it is a DataFrame, None otherwise
-
-    Raises:
-        - ValueError: if `table_name` is not a valid string
-        - NameError: if a variable with the name '_cached_' + table_name
-            does not exist in the global scope
-        - TypeError: if the cache is not None or a pd.DataFrame
-    """
-    if not (isinstance(table_name, str) and _is_identifier(table_name)):
-        raise ValueError(
-            f"`table_name` {table_name} is not a valid identifier"
-        )
-    cache_name = '_cached_' + table_name
-    if cache_name not in globals():
-        raise NameError(f"{cache_name} not found in globals")
-    cache = globals()[cache_name]
-    if not (cache is None or isinstance(cache, pd.DataFrame)):
-        raise TypeError(
-            f"{cache_name} is not a DataFrame"
-            f"(its type is {type(cache)})"
-        )
-    return cache
-
-
-def _set_cache(table_name: str, value: Union[pd.DataFrame, None]) -> None:
-    """
-    Set the cache of a table.
-
-    Parameters:
-        - table_name (str): The name of the table.
-            The table name must be a non-empty string containing only
-            alphanumeric characters.
-        - value: The value to set the cache to. The value must be None
-            or a pd.DataFrame
-
-    Returns:
-        The cache.
-
-    Raises:
-        - ValueError: if `table_name` is not a valid string
-        - TypeError: if the `value` is not None or a pd.DataFrame
-    """
-    if not (isinstance(table_name, str) and _is_identifier(table_name)):
-        raise ValueError(
-            f"`table_name` {table_name} is not a valid identifier"
-        )
-    if not (value is None or isinstance(value, pd.DataFrame)):
-        raise TypeError("`value` is not None or a DataFrame")
-    cache_name = '_cached_' + table_name
-    _set_global_variable(cache_name, value)
-    return value
-
-
-def _get_cache_loader(table_name: str) -> Callable[[], Type[pd.DataFrame]]:
-    """
-    Get the cache loader function of a table.
-
-    Parameters:
-        - table_name (str): The name of the table.
-            The table name must be a non-empty string containing only
-            alphanumeric characters.
-
-    Returns:
-        - Callable[[], Type[pd.DataFrame]]: The cache loader function.
-
-    Raises:
-        - ValueError: if `table_name` is not a valid string
-        - NameError: if a variable with the name '_load_cached_' + table_name
-            does not exist in the global scope
-    """
-    if not (isinstance(table_name, str) and _is_identifier(table_name)):
-        raise ValueError(
-            f"`table_name` {table_name} is not a valid identifier"
-        )
-    loader_name = '_load_cached_' + table_name
-    if loader_name not in globals():
-        raise NameError(f"{loader_name} not found in globals")
-    loader = globals()[loader_name]
-    if not isinstance(loader, Callable):
-        raise TypeError(
-            f"{loader_name} is not a Callable"
-            f"(its type is {type(loader)})"
-        )
-    return loader
-
-
-def _init_cache(table_name: str) -> None:
-    """
-    Initialize the cache for a table.
-    If the cache for the table does not exist, it is loaded using
-    the corresponding cache loader.
-
-    Parameters:
-    - table_name (str): The name of the table.
-        The table name must be a non-empty string containing
-        only alphanumeric characters.
-
-    Returns:
-        The cache.
-
-    Raises:
-    - ValueError: if `table_name` is not a valid string
-    - NameError: if a variable with the name '_cached_' + table_name
-        or '_load_cached_' + table_name  does not exist in the global scope
-    """
-    cache = _get_cache(table_name)
-    cache_loader = _get_cache_loader(table_name)
-    if cache is None:
-        cache = _set_cache(table_name, cache_loader())
-    return cache
 
 
 """ Raw tables with object dtypes
@@ -1575,8 +1402,11 @@ def get_customer_location_counts(
     customer_orders = get_customer_orders(
         customers_index=customers_index
     )
-    customer_locs = customer_orders.drop_duplicates()
-    return customer_locs.customer_id.value_counts()
+    customer_orders.drop_duplicates(inplace=True)
+    counts = pd.DataFrame(customer_orders.customer_id.value_counts())
+    counts.index.name = 'customer_id'
+    counts.columns = ['locations_count']
+    return counts
 
 
 def index_of_sedentary_customers_v1(index=None):
@@ -1857,6 +1687,57 @@ def index_of_sellers_from_state(
     return sellers[sellers.state == state].index
 
 
+def _min_max_mask(series: pd.Series, min_val: float, max_val: float) -> np.ndarray:
+    mask = None
+    if not (min_val is None and max_val is None):
+        min_mask = None if min_val is None else (series >= min_val)
+        max_mask = None if max_val is None else (series <= max_val)
+        if not (min_mask is None or max_mask is None):
+            mask = min_mask & max_mask
+        elif max_mask is None:
+            mask = min_mask
+        else:
+            mask = max_mask
+    return mask
+
+
+def index_of_product_categories_by_products_count(
+    min_count: Optional[int] = None,
+    max_count: Optional[int] = None
+) -> pd.Index:
+    categories = get_product_categories()
+
+    mask = _min_max_mask(categories.products_count, min_count, max_count)
+
+    subset = (
+        categories if mask is None
+        else categories[mask]
+    )
+    subset = subset.sort_values(by='products_count', ascending=False)
+    subset.set_index('category_name', inplace=True)
+
+    return subset.index
+
+
+def index_of_reviews_by_score(
+    min_score: Optional[int] = None,
+    max_score: Optional[int] = None
+) -> pd.Index:
+    order_reviews = _expand_index(get_order_reviews())
+    order_reviews.reset_index(0, inplace=True)
+
+    mask = _min_max_mask(order_reviews.score, min_score, max_score)
+
+    subset = (
+        order_reviews if mask is None
+        else order_reviews[mask]
+    )
+    subset = subset.sort_values(by='score', ascending=False)
+
+    return subset.index
+
+
+
 """ Merging
 """
 
@@ -1986,7 +1867,7 @@ def _load_sales():
     return data
 
 
-def _load_cached_orders_reviews():
+def _load_orders_reviews():
     reviews = _expand_index(get_order_reviews()).reset_index(1)
     orders = get_orders()
     reviews.columns.name = 'reviews'
@@ -2010,7 +1891,7 @@ def _load_cached_orders_reviews():
     return data
 
 
-def _load_cached_customers_orders():
+def _load_customers_orders():
     customers = get_customer_orders()
     orders = get_orders()
     customers.columns.name = 'customers'
@@ -2035,7 +1916,7 @@ def _load_cached_customers_orders():
     return data
 
 
-def _load_cached_orders_payments():
+def _load_orders_payments():
     payments = _expand_index(get_order_payments()).reset_index(1)
     orders = get_orders()
     payments.columns.name = 'payments'
@@ -2059,7 +1940,7 @@ def _load_cached_orders_payments():
     return data
 
 
-def _load_cached_customers_orders_payments():
+def _load_customers_orders_payments():
     c = get_customer_orders()
     o = get_orders()
     p = _expand_index(get_order_payments()).reset_index(1)
@@ -2090,7 +1971,7 @@ def _load_cached_customers_orders_payments():
     return data
 
 
-def _load_cached_customers_orders_reviews():
+def _load_customers_orders_reviews():
     o = get_orders()
     c = get_customer_orders()
     r = _expand_index(get_order_reviews()).reset_index(1)
@@ -2121,7 +2002,7 @@ def _load_cached_customers_orders_reviews():
     return data
 
 
-def _load_cached_orders_payments_reviews():
+def _load_orders_payments_reviews():
     o = get_orders()
     p = _expand_index(get_order_payments()).reset_index(1)
     r = _expand_index(get_order_reviews()).reset_index(1)
@@ -2152,7 +2033,7 @@ def _load_cached_orders_payments_reviews():
     return data
 
 
-def _load_cached_order_details():
+def _load_order_details():
     c = get_customer_orders()
     o = get_orders()
     p = _expand_index(get_order_payments()).reset_index(1)
@@ -2188,7 +2069,7 @@ def _load_cached_order_details():
     return data
 
 
-def _load_cached_sales_details():
+def _load_sales_details():
     i = _expand_index(get_order_items()).reset_index()
     s = get_sellers()
     c = get_product_categories().set_index('category_name')
@@ -2227,7 +2108,7 @@ def _load_cached_sales_details():
     return data
 
 
-def _load_cached_all_in_one():
+def _load_all_in_one():
     od = get_order_details()
     sd = get_sales_details()
     sd.reset_index(inplace=True)
@@ -2248,8 +2129,6 @@ def _load_cached_all_in_one():
     return data
 
 
-# TODO : test métier de filtered copy avec ce cas :
-# j'ai obtenu un plantage avec (None, documented_products)
 def get_categorized_products(
     categories_index: Optional[Iterable] = None,
     products_index: Optional[Iterable] = None
@@ -2260,13 +2139,14 @@ def get_categorized_products(
     )
     return filtered_copy(
         categorized_products,
-        rows_filter=(categories_index, products_index)
+        rows_filter={'_ident_': [categories_index, products_index]}
     )
 
 
 def get_products_sales(
     orders_index: Optional[Iterable] = None,
-    products_index: Optional[Iterable] = None
+    products_index: Optional[Iterable] = None,
+    sellers_index: Optional[Iterable] = None
 ) -> pd.DataFrame:
     products_sales = Cache.init(
         'products_sales',
@@ -2274,18 +2154,21 @@ def get_products_sales(
     )
     return filtered_copy(
         products_sales,
-        rows_filter=(orders_index, None, products_index)
+        rows_filter={'_ident_': [orders_index, products_index]},
+        data_filter={'sales': sellers_index}
     )
 
 
 def get_sellers_sales(
     orders_index: Optional[Iterable] = None,
-    sellers_index: Optional[Iterable] = None
+    sellers_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None
 ) -> pd.DataFrame:
     sellers_sales = Cache.init('sellers_sales', _load_sellers_sales)
     return filtered_copy(
         sellers_sales,
-        rows_filter=(orders_index, None, sellers_index)
+        rows_filter={'_ident_': [orders_index, sellers_index]},
+        data_filter={'sales': products_index}
     )
 
 
@@ -2297,48 +2180,145 @@ def get_sales(
     sales = Cache.init('sales', _load_sales)
     return filtered_copy(
         sales,
-        rows_filter={('_ident_', 'order_id'): orders_index},
-        data_filter={
-            ('sales', 'product_id'): products_index,
-            ('sales', 'seller_id'): sellers_index
+        rows_filter={'_ident_': orders_index},
+        data_filter={'sales': [products_index, sellers_index]}
+    )
+
+
+def get_orders_reviews(
+    orders_index: Optional[Iterable] = None,
+    reviews_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    orders_reviews = Cache.init('orders_reviews', _load_orders_reviews)
+    return filtered_copy(
+        orders_reviews,
+        rows_filter={'_ident_': [orders_index, reviews_index]}
+    )
+
+
+def get_customers_orders(
+    orders_index: Optional[Iterable] = None,
+    customers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    customers_orders = Cache.init('customers_orders', _load_customers_orders)
+    return filtered_copy(
+        customers_orders,
+        rows_filter={'_ident_': [orders_index, customers_index]}
+    )
+
+
+def get_orders_payments(
+    orders_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    orders_payments = Cache.init('orders_payments', _load_orders_payments)
+    return filtered_copy(
+        orders_payments,
+        rows_filter={'_ident_': orders_index}
+    )
+
+
+def get_customers_orders_payments(
+    orders_index: Optional[Iterable] = None,
+    customers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    cop = Cache.init(
+        'customers_orders_payments',
+        _load_customers_orders_payments
+    )
+    return filtered_copy(
+        cop,
+        rows_filter={'_ident_': [orders_index, customers_index]}
+    )
+
+
+def get_customers_orders_reviews(
+    orders_index: Optional[Iterable] = None,
+    customers_index: Optional[Iterable] = None,
+    reviews_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    cor = Cache.init(
+        'customers_orders_reviews',
+        _load_customers_orders_reviews
+    )
+    return filtered_copy(
+        cor,
+        rows_filter={
+            '_ident_': [orders_index, customers_index, reviews_index]
         }
     )
 
 
-def get_customers_orders_payments():
-    return _init_cache('customers_orders_payments').copy()
+def get_orders_payments_reviews(
+    orders_index: Optional[Iterable] = None,
+    reviews_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    opr = Cache.init(
+        'orders_payments_reviews',
+        _load_orders_payments_reviews
+    )
+    return filtered_copy(
+        opr,
+        rows_filter={
+            '_ident_': [orders_index, reviews_index]
+        }
+    )
 
 
-def get_customers_orders_reviews():
-    return _init_cache('customers_orders_reviews').copy()
+def get_order_details(
+    orders_index: Optional[Iterable] = None,
+    customers_index: Optional[Iterable] = None,
+    reviews_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    order_details = Cache.init(
+        'order_details',
+        _load_order_details
+    )
+    return filtered_copy(
+        order_details,
+        rows_filter={
+            '_ident_': [orders_index, customers_index, reviews_index]
+        }
+    )
 
 
-def get_orders_payments_reviews():
-    return _init_cache('orders_payments_reviews').copy()
+def get_sales_details(
+    orders_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None,
+    sellers_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    sales_details = Cache.init(
+        'sales_details',
+        _load_sales_details
+    )
+    return filtered_copy(
+        sales_details,
+        rows_filter={
+            '_ident_': [orders_index, products_index, sellers_index]
+        }
+    )
 
 
-def get_orders_reviews():
-    return _init_cache('orders_reviews').copy()
-
-
-def get_customers_orders():
-    return _init_cache('customers_orders').copy()
-
-
-def get_orders_payments():
-    return _init_cache('orders_payments').copy()
-
-
-def get_order_details():
-    return _init_cache('order_details').copy()
-
-
-def get_sales_details():
-    return _init_cache('sales_details').copy()
-
-
-def get_all_in_one():
-    return _init_cache('all_in_one').copy()
+def get_all_in_one(
+    orders_index: Optional[Iterable] = None,
+    products_index: Optional[Iterable] = None,
+    sellers_index: Optional[Iterable] = None,
+    customers_index: Optional[Iterable] = None,
+    reviews_index: Optional[Iterable] = None
+) -> pd.DataFrame:
+    all_in_one = Cache.init(
+        'all_in_one',
+        _load_all_in_one
+    )
+    return filtered_copy(
+        all_in_one,
+        rows_filter={
+            '_ident_': [
+                orders_index, products_index,
+                sellers_index, customers_index,
+                reviews_index
+            ]
+        }
+    )
 
 
 """def get_payment_types():
@@ -2378,7 +2358,7 @@ def get_all_in_one():
 """
 
 
-def get_customer_order_counts(index=None):
+def get_customer_order_counts_v1(index=None):
     """Get the customer order counts feature series."""
     customers = get_customers_v1(index=index)
     return customers.order_id.apply(len)

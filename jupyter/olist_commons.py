@@ -6,8 +6,10 @@ for a e-commerce dataset.
 from typing import *
 from sys import getsizeof
 from datetime import *
+from math import ceil
 import time
 import requests
+from itertools import tee, islice
 from unidecode import unidecode
 from bs4 import BeautifulSoup
 import numpy as np
@@ -15,6 +17,7 @@ import pandas as pd
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.cluster import KMeans
 from sklearn.metrics import (
     silhouette_samples,
@@ -64,20 +67,8 @@ def table_content_analysis(data):
     display(data)
 
 
-# as the tables are small we preload them in the raw object format
-_raw_customers = load_table('customers')
-_raw_geolocations = load_table('geolocation')
-_raw_order_items = load_table('order_items')
-_raw_order_payments = load_table('order_payments')
-_raw_order_reviews = load_table('order_reviews')
-_raw_orders = load_table('orders')
-_raw_products = load_table('products')
-_raw_sellers = load_table('sellers')
-_raw_product_categories = load_product_categories_table()
-
-
 # globals for pk-indexed unitary tables caching
-_cached_order_items = None
+"""_cached_order_items = None
 _cached_order_items_mi = None
 _cached_orders = None
 _cached_customer_orders = None
@@ -87,7 +78,7 @@ _cached_sellers = None
 _cached_order_payments = None
 _cached_order_reviews = None
 _cached_product_categories = None
-_cached_geolocations = None
+_cached_geolocations = None"""
 
 
 """ Raw tables with object dtypes
@@ -101,13 +92,16 @@ def filter_by_indices(
     """Filter a data table by multiple indices.
 
     Args:
-        data (pd.DataFrame): The data table to filter.
-        filter_columns (dict): A dictionary mapping column names to indices.
+        data (pd.DataFrame):
+            The data table to filter.
+        filter_columns (dict):
+            A dictionary mapping column names to indices.
             Rows in the data table that do not have values in the indices
             for the respective columns will be filtered out.
 
     Returns:
-        pd.DataFrame: The data table with rows filtered by the indices.
+        pd.DataFrame:
+            The data table with rows filtered by the indices.
     """
     # Create a boolean mask that is True for every row
     mask = pd.Series(True, index=data.index)
@@ -122,13 +116,6 @@ def filter_by_indices(
     return data[mask]
 
 
-def get_raw_order_items_v1() -> pd.DataFrame:
-    """Deprecated: use `get_raw_order_items` instead.
-    Returns the raw order items data table.
-    """
-    return _raw_order_items.copy()
-
-
 def get_raw_order_items(
     orders_index: Optional[Iterable] = None,
     products_index: Optional[Iterable] = None,
@@ -137,32 +124,30 @@ def get_raw_order_items(
     """Returns the raw order items data table.
 
     Args:
-        orders_index (iterable, optional): The orders index to filter the
-            raw data table by.
-        products_index (iterable, optional): The products index to filter the
-            raw data table by.
-        sellers_index (iterable, optional): The sellers index to filter the
-            raw data table by.
+        orders_index (iterable, optional):
+            The orders index to filter the raw data table by.
+        products_index (iterable, optional):
+            The products index to filter the raw data table by.
+        sellers_index (iterable, optional):
+            The sellers index to filter the raw data table by.
 
     Returns:
-        pd.DataFrame: The raw order items data table,
+        pd.DataFrame:
+            The raw order items data table,
             optionally filtered by the orders, products, and sellers indices.
     """
+    raw_order_items = Cache.init(
+        'raw_order_items',
+        lambda: load_table('order_items')
+    )
     return filter_by_indices(
-        data=_raw_order_items.copy(),
+        data=raw_order_items,
         filter_columns={
             'order_id': orders_index,
             'product_id': products_index,
             'seller_id': sellers_index
         }
     )
-
-
-def get_raw_orders_v1() -> pd.DataFrame:
-    """Deprecated: use `get_raw_orders` instead.
-    Returns the raw orders data table.
-    """
-    return _raw_orders.copy()
 
 
 def get_raw_orders(
@@ -172,29 +157,27 @@ def get_raw_orders(
     """Returns the raw orders data table.
 
     Args:
-        orders_index (iterable, optional): The orders index to filter the
-            raw data table by.
-        customers_index (iterable, optional): The customers index to filter
-            the raw data table by.
+        orders_index (iterable, optional):
+            The orders index to filter the raw data table by.
+        customers_index (iterable, optional):
+            The customers index to filter the raw data table by.
 
     Returns:
-        pd.DataFrame: The raw orders data table,
+        pd.DataFrame:
+            The raw orders data table,
             optionally filtered by the orders and customers indices.
     """
+    raw_orders = Cache.init(
+        'raw_orders',
+        lambda: load_table('orders')
+    )
     return filter_by_indices(
-        data=_raw_orders.copy(),
+        data=raw_orders,
         filter_columns={
             'order_id': orders_index,
             'customer_id': customers_index
         }
     )
-
-
-def get_raw_customers_v1() -> pd.DataFrame:
-    """Deprecated: use `get_raw_customers` instead.
-    Returns the raw customers data table.
-    """
-    return _raw_customers.copy()
 
 
 def get_raw_customers(
@@ -204,29 +187,27 @@ def get_raw_customers(
     """Returns the raw customers data table.
 
     Args:
-        customers_index (iterable, optional): The customers index to filter
-            the raw data table by.
-        unique_customers_index (iterable, optional): The unique customers
-            index to filter the raw data table by.
+        customers_index (iterable, optional):
+            The customers index to filter the raw data table by.
+        unique_customers_index (iterable, optional):
+            The unique customers index to filter the raw data table by.
 
     Returns:
-        pd.DataFrame: The raw customers data table,
+        pd.DataFrame:
+            The raw customers data table,
             optionally filtered by the customers and unique customers indices.
     """
+    raw_customers = Cache.init(
+        'raw_customers',
+        lambda: load_table('customers')
+    )
     return filter_by_indices(
-        data=_raw_customers.copy(),
+        data=raw_customers,    # _raw_customers.copy(),
         filter_columns={
             'customer_id': customers_index,
             'customer_unique_id': unique_customers_index
         }
     )
-
-
-def get_raw_products_v1() -> pd.DataFrame:
-    """Deprecated: use `get_raw_products` instead.
-    Returns the raw products data table.
-    """
-    return _raw_products.copy()
 
 
 def get_raw_products(
@@ -235,26 +216,24 @@ def get_raw_products(
     """Returns the raw products data table.
 
     Args:
-        products_index (iterable, optional): The products index to filter the
-            raw data table by.
+        products_index (iterable, optional):
+            The products index to filter the raw data table by.
 
     Returns:
-        pd.DataFrame: The raw products data table,
+        pd.DataFrame:
+            The raw products data table,
             optionally filtered by the products index.
     """
+    raw_products = Cache.init(
+        'raw_products',
+        lambda: load_table('products')
+    )
     return filter_by_indices(
-        data=_raw_products.copy(),
+        data=raw_products,   # _raw_products.copy(),
         filter_columns={
             'product_id': products_index
         }
     )
-
-
-def get_raw_sellers_v1() -> pd.DataFrame:
-    """Deprecated: use `get_raw_sellers` instead.
-    Returns the raw sellers data table.
-    """
-    return _raw_sellers.copy()
 
 
 def get_raw_sellers(
@@ -263,26 +242,24 @@ def get_raw_sellers(
     """Returns the raw sellers data table.
 
     Args:
-        sellers_index (iterable, optional): The sellers index to filter the
-            raw data table by.
+        sellers_index (iterable, optional):
+            The sellers index to filter the raw data table by.
 
     Returns:
-        pd.DataFrame: The raw sellers data table,
+        pd.DataFrame:
+            The raw sellers data table,
             optionally filtered by the sellers index.
     """
+    raw_sellers = Cache.init(
+        'raw_sellers',
+        lambda: load_table('sellers')
+    )
     return filter_by_indices(
-        data=_raw_sellers.copy(),
+        data=raw_sellers,   #_raw_sellers.copy(),
         filter_columns={
             'product_id': sellers_index
         }
     )
-
-
-def get_raw_order_payments_v1() -> pd.DataFrame:
-    """Deprecated: use `get_raw_order_payments` instead.
-    Returns the raw order payments data table.
-    """
-    return _raw_order_payments.copy()
 
 
 def get_raw_order_payments(
@@ -291,26 +268,23 @@ def get_raw_order_payments(
     """Returns the raw order payments data table.
 
     Args:
-        orders_index (iterable, optional): The orders index to filter the
-            raw data table by.
+        orders_index (iterable, optional):
+            The orders index to filter the raw data table by.
 
     Returns:
         pd.DataFrame: The raw order payments data table,
             optionally filtered by the orders index.
     """
+    raw_order_payments = Cache.init(
+        'raw_order_payments',
+        lambda: load_table('order_payments')
+    )
     return filter_by_indices(
-        data=_raw_order_payments.copy(),
+        data=raw_order_payments,   # _raw_order_payments.copy(),
         filter_columns={
             'order_id': orders_index
         }
     )
-
-
-def get_raw_order_reviews_v1() -> pd.DataFrame:
-    """Deprecated: use `get_raw_order_reviews` instead.
-    Returns the raw order reviews data table.
-    """
-    return _raw_order_reviews.copy()
 
 
 def get_raw_order_reviews(
@@ -319,15 +293,19 @@ def get_raw_order_reviews(
     """Returns the raw order reviews data table.
 
     Args:
-        orders_index (iterable, optional): The orders index to filter the
-            raw data table by.
+        orders_index (iterable, optional):
+            The orders index to filter the raw data table by.
 
     Returns:
         pd.DataFrame: The raw order reviews data table,
             optionally filtered by the orders index.
     """
+    raw_order_reviews = Cache.init(
+        'raw_order_reviews',
+        lambda: load_table('order_reviews')
+    )
     return filter_by_indices(
-        data=_raw_order_reviews.copy(),
+        data=raw_order_reviews,    # _raw_order_reviews.copy(),
         filter_columns={
             'order_id': orders_index
         }
@@ -338,18 +316,28 @@ def get_raw_product_categories():
     """Returns the raw product categories data table.
 
     Returns:
-        pd.DataFrame: The raw product categories data table.
+        pd.DataFrame:
+            The raw product categories data table.
     """
-    return _raw_product_categories.copy()
+    raw_product_categories = Cache.init(
+        'raw_product_categories',
+        load_product_categories_table
+    )
+    return raw_product_categories.copy()
 
 
 def get_raw_geolocations():
     """Returns the raw geolocations data table.
 
     Returns:
-        pd.DataFrame: The raw geolocations data table.
+        pd.DataFrame:
+            The raw geolocations data table.
     """
-    return _raw_geolocations.copy()
+    raw_geolocations = Cache.init(
+        'raw_geolocations',
+        lambda: load_table('geolocation')
+    )
+    return raw_geolocations.copy()
 
 
 """Tables indexed by their primary key (simple or compound)
@@ -562,8 +550,8 @@ def _load_pk_indexed_table(
     return data.copy()  # TODO : remove after filtered_copy bypassing tests
 
 
-def get_order_items_v1(index=None) -> pd.DataFrame:
-    """Get the order items pk-indexed data table."""
+"""def get_order_items_v1(index=None) -> pd.DataFrame:
+    "" "Get the order items pk-indexed data table."" "
     order_items = get_raw_order_items()
     pk = pd.Series(list(zip(
         order_items.order_id,
@@ -572,10 +560,10 @@ def get_order_items_v1(index=None) -> pd.DataFrame:
     order_items = order_items.set_index(pk)
     order_items = order_items.drop(columns=['order_id', 'order_item_id'])
     order_items.columns.name = 'order_items'
-    return order_items if index is None else order_items.loc[index]
+    return order_items if index is None else order_items.loc[index]"""
 
 
-def _load_cached_order_items():
+def _load_order_items():
     # Retrieve the raw order items data table,
     # optionally filtered by the orders, products and sellers indexes
     oi = get_raw_order_items()
@@ -598,10 +586,11 @@ def _load_cached_order_items():
     cast_columns(oi, ['price', 'freight_value'], float)
 
     # Save to the cache global variable
-    global _cached_order_items
-    _cached_order_items = oi
+    #global _cached_order_items
+    #_cached_order_items = oi
 
-    return oi.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return oi.copy()  # TODO : remove after filtered_copy bypassing tests
+    return oi
 
 
 def get_order_items(
@@ -627,18 +616,21 @@ def get_order_items(
             optionally filtered by the orders, products, and sellers indices.
     """
     # If the _cached_order_items table is not set, set it
-    global _cached_order_items
+    """global _cached_order_items
     if _cached_order_items is None:
-        _load_cached_order_items()
-
+        _load_cached_order_items()"""
+    order_items = Cache.init(
+        'order_items',
+        _load_order_items
+    )
     return filtered_copy(
-        _cached_order_items,
+        order_items,
         rows_filter=(orders_index, None),
         data_filter=[products_index, sellers_index]
     )
 
 
-def _load_cached_order_items_mi():
+def _load_order_items_mi():
     # Retrieve the raw order items data table,
     # optionally filtered by the orders, products and sellers indexes
     oi_mi = get_raw_order_items()
@@ -657,10 +649,10 @@ def _load_cached_order_items_mi():
     cast_columns(oi_mi, ['price', 'freight_value'], float)
 
     # Save to the cache global variable
-    global _cached_order_items_mi
-    _cached_order_items_mi = oi_mi
-
-    return oi_mi.copy()  # TODO : remove after filtered_copy bypassing tests
+    #global _cached_order_items_mi
+    #_cached_order_items_mi = oi_mi
+    #return oi_mi.copy()  # TODO : remove after filtered_copy bypassing tests
+    return oi_mi
 
 
 def get_order_items_multi_index(
@@ -686,19 +678,22 @@ def get_order_items_multi_index(
             optionally filtered by the orders, products, and sellers indices.
     """
     # If the _cached_order_items table is not set, set it
-    global _cached_order_items_mi
+    """global _cached_order_items_mi
     if _cached_order_items_mi is None:
-        _load_cached_order_items_mi()
-
+        _load_order_items_mi()"""
+    order_items_mi = Cache.init(
+        'order_items_mi',
+        _load_order_items_mi
+    )
     return filtered_copy(
-        _cached_order_items_mi,
+        order_items_mi,
         rows_filter=(orders_index, None),
         data_filter=[products_index, sellers_index]
     )
 
 
-def get_orders_v1(index=None) -> pd.DataFrame:
-    """Get the orders pk-indexed data table."""
+"""def get_orders_v1(index=None) -> pd.DataFrame:
+    "" "Get the orders pk-indexed data table."" "
     orders = get_raw_orders()
     orders = orders.set_index('order_id', drop=True)
     orders = orders.drop(columns='customer_id')
@@ -713,10 +708,10 @@ def get_orders_v1(index=None) -> pd.DataFrame:
         'estimated_delivery_date': 'datetime64[ns]'
     })
 
-    return orders if index is None else orders.loc[index]
+    return orders if index is None else orders.loc[index]"""
 
 
-def _load_cached_orders():
+def _load_orders():
     # Retrieve the raw orders data table
     o = get_raw_orders()
 
@@ -733,10 +728,11 @@ def _load_cached_orders():
     cast_columns(o, o.columns[1:], 'datetime64[ns]')
 
     # Save to the cache global variable
-    global _cached_orders
-    _cached_orders = o
+    #global _cached_orders
+    #_cached_orders = o
 
-    return o.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return o.copy()  # TODO : remove after filtered_copy bypassing tests
+    return o
 
 
 def get_orders(
@@ -755,18 +751,25 @@ def get_orders(
             optionally filtered by the orders indices.
     """
     # If the _cached_orders table is not set, set it
-    global _cached_orders
+    """global _cached_orders
     if _cached_orders is None:
-        _load_cached_orders()
-
+        _load_orders()"""
+    """orders = Cache.init(
+        'orders',
+        _load_orders
+    )
     return filtered_copy(
-        _cached_orders,
+        orders,
+        rows_filter=orders_index
+    )"""
+    return filtered_copy(
+        Cache.init('orders', _load_orders),
         rows_filter=orders_index
     )
 
 
-def get_customer_orders_v1(index=None) -> pd.DataFrame:
-    """Get the customer orders pk-indexed data table."""
+"""def get_customer_orders_v1(index=None) -> pd.DataFrame:
+    "" "Get the customer orders pk-indexed data table."" "
     customers = pd.merge(
         get_raw_customers(),
         get_raw_orders()[['order_id', 'customer_id']],
@@ -785,10 +788,10 @@ def get_customer_orders_v1(index=None) -> pd.DataFrame:
     )
     customers.columns.name = 'customers_orders'
 
-    return customers if index is None else customers.loc[index]
+    return customers if index is None else customers.loc[index]"""
 
 
-def _load_cached_customer_orders():
+def _load_customer_orders():
     # Retrieve the raw customers and orders data table
     # and merge them on customer_id key
     co = pd.merge(
@@ -822,10 +825,11 @@ def _load_cached_customer_orders():
     normalize_city_names(co)
 
     # Save to the cache global variable
-    global _cached_customer_orders
-    _cached_customer_orders = co
+    #global _cached_customer_orders
+    #_cached_customer_orders = co
 
-    return co.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return co.copy()  # TODO : remove after filtered_copy bypassing tests
+    return co
 
 
 def get_customer_orders(
@@ -848,26 +852,26 @@ def get_customer_orders(
             optionally filtered by the orders and customers indices.
     """
     # If the _cached_customer_orders table is not set, set it
-    global _cached_customer_orders
+    """global _cached_customer_orders
     if _cached_customer_orders is None:
-        _load_cached_customer_orders()
+        _load_customer_orders()"""
     return filtered_copy(
-        _cached_customer_orders,
+        Cache.init('customer_orders', _load_customer_orders),
         rows_filter=orders_index,
         data_filter=customers_index
     )
 
 
-def get_customers_v1(index=None):
-    """Get the customers pk-indexed data table."""
+"""def get_customers_v1(index=None):
+    "" "Get the customers pk-indexed data table."" "
     customer_orders = get_customer_orders_v1().reset_index()
     customer_orders = normalize_city_names_v1(customer_orders)
     customers = customer_orders.groupby(by='customer_id').agg(list)
     customers.columns.name = 'customers'
-    return customers if index is None else customers.loc[index]
+    return customers if index is None else customers.loc[index]"""
 
 
-def _load_cached_customers():
+def _load_customers():
     # Retrieve the pk-indexed customer orders data table
     co = get_customer_orders().reset_index()
 
@@ -876,10 +880,11 @@ def _load_cached_customers():
     c.columns.name = 'customers'
 
     # Save to the cache global variable
-    global _cached_customers
-    _cached_customers = c
+    #global _cached_customers
+    #_cached_customers = c
 
-    return c.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return c.copy()  # TODO : remove after filtered_copy bypassing tests
+    return c
 
 
 def get_customers(
@@ -902,19 +907,19 @@ def get_customers(
             optionally filtered by the orders and customers indices.
     """
     # If the _cached_customers table is not set, set it
-    global _cached_customers
+    """global _cached_customers
     if _cached_customers is None:
-        _load_cached_customers()
+        _load_customers()"""
 
     return filtered_copy(
-        _cached_customers,
+        Cache.init('customers', _load_customers),
         rows_filter=customers_index,
         data_filter=orders_index
     )
 
 
-def get_products_v1(index=None):
-    """Get the products pk-indexed data table."""
+"""def get_products_v1(index=None):
+    "" "Get the products pk-indexed data table."" "
     products = get_raw_products()
     products = products.set_index('product_id', drop=True)
     i = len('product_')
@@ -926,10 +931,10 @@ def get_products_v1(index=None):
         'height_cm': float,
         'width_cm': float
     })
-    return products if index is None else products.loc[index]
+    return products if index is None else products.loc[index]"""
 
 
-def _load_cached_products():
+def _load_products():
     # Retrieve the raw products data table,
     # optionally filtered by the products index
     p = get_raw_products()
@@ -946,10 +951,11 @@ def _load_cached_products():
     cast_columns(p, physical_features, float)
 
     # Save to the cache global variable
-    global _cached_products
-    _cached_products = p
+    #global _cached_products
+    #_cached_products = p
 
-    return p.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return p.copy()  # TODO : remove after filtered_copy bypassing tests
+    return p
 
 
 def get_products(
@@ -969,27 +975,27 @@ def get_products(
             optionally filtered by the products index.
     """
     # If the _cached_products table is not set, set it
-    global _cached_products
+    """global _cached_products
     if _cached_products is None:
-        _load_cached_products()
+        _load_products()"""
 
     return filtered_copy(
-        _cached_products,
+        Cache.init('products', _load_products),
         rows_filter=products_index
     )
 
 
-def get_sellers_v1(index=None):
-    """Get the sellers pk-indexed data table."""
+"""def get_sellers_v1(index=None):
+    "" "Get the sellers pk-indexed data table."" "
     sellers = get_raw_sellers()
     sellers = sellers.set_index('seller_id', drop=True)
     i = len('seller_')
     sellers.columns = [c[i:] for c in sellers.columns]
     sellers.columns.name = 'sellers'
-    return sellers if index is None else sellers.loc[index]
+    return sellers if index is None else sellers.loc[index]"""
 
 
-def _load_cached_sellers():
+def _load_sellers():
     # Retrieve the raw sellers data table
     s = get_raw_sellers()
 
@@ -1004,10 +1010,11 @@ def _load_cached_sellers():
     normalize_city_names(s)
 
     # Save to the cache global variable
-    global _cached_sellers
-    _cached_sellers = s
+    #global _cached_sellers
+    #_cached_sellers = s
 
-    return s.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return s.copy()  # TODO : remove after filtered_copy bypassing tests
+    return s
 
 
 def get_sellers(
@@ -1027,18 +1034,18 @@ def get_sellers(
             optionally filtered by the sellers index.
     """
     # If the _cached_sellers table is not set, set it
-    global _cached_sellers
+    """global _cached_sellers
     if _cached_sellers is None:
-        _load_cached_sellers()
+        _load_sellers()"""
 
     return filtered_copy(
-        _cached_sellers,
+        Cache.init('sellers', _load_sellers),
         rows_filter=sellers_index
     )
 
 
-def get_order_payments_v1(orders_index=None):
-    """Get the order pk-indexed payments data table."""
+"""def get_order_payments_v1(orders_index=None):
+    "" "Get the order pk-indexed payments data table." ""
     order_payments = get_raw_order_payments(orders_index=orders_index)
     pk = pd.Series(list(zip(
         order_payments.order_id,
@@ -1058,10 +1065,10 @@ def get_order_payments_v1(orders_index=None):
     return (
         order_payments if orders_index is None
         else order_payments.loc[orders_index]
-    )
+    )"""
 
 
-def _load_cached_order_payments():
+def _load_order_payments():
     # Retrieve the raw order payments data table,
     # optionally filtered by the orders index
     op = get_raw_order_payments()
@@ -1082,10 +1089,11 @@ def _load_cached_order_payments():
     cast_columns(op, ['value'], float)
 
     # Save to the cache global variable
-    global _cached_order_payments
-    _cached_order_payments = op
+    #global _cached_order_payments
+    #_cached_order_payments = op
 
-    return op.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return op.copy()  # TODO : remove after filtered_copy bypassing tests
+    return op
 
 
 def get_order_payments(
@@ -1105,18 +1113,18 @@ def get_order_payments(
             optionally filtered by the orders index.
     """
     # If the _cached_order_payments table is not set, set it
-    global _cached_order_payments
+    """global _cached_order_payments
     if _cached_order_payments is None:
-        _load_cached_order_payments()
+        _load_order_payments()"""
 
     return filtered_copy(
-        _cached_order_payments,
+        Cache.init('order_payments', _load_order_payments),
         rows_filter=(orders_index, None)
     )
 
 
-def get_order_reviews_v1(index=None):
-    """Get the order reviews pk-indexed data table."""
+"""def get_order_reviews_v1(index=None):
+    "" "Get the order reviews pk-indexed data table." ""
     order_reviews = get_raw_order_reviews()
     pk = pd.Series(list(zip(
         order_reviews.order_id,
@@ -1129,10 +1137,10 @@ def get_order_reviews_v1(index=None):
     i = len('review_')
     order_reviews.columns = [c[i:] for c in order_reviews.columns]
     order_reviews.columns.name = 'order_reviews'
-    return order_reviews if index is None else order_reviews.loc[index]
+    return order_reviews if index is None else order_reviews.loc[index]"""
 
 
-def _load_cached_order_reviews():
+def _load_order_reviews():
     # Retrieve the raw sellers data table,
     # optionally filtered by the orders index
     orw = get_raw_order_reviews()
@@ -1157,10 +1165,11 @@ def _load_cached_order_reviews():
     cast_columns(orw, ['score'], int)
 
     # Save to the cache global variable
-    global _cached_order_reviews
-    _cached_order_reviews = orw
+    #global _cached_order_reviews
+    #_cached_order_reviews = orw
 
-    return orw.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return orw.copy()  # TODO : remove after filtered_copy bypassing tests
+    return orw
 
 
 def get_order_reviews(
@@ -1180,18 +1189,18 @@ def get_order_reviews(
             optionally filtered by the orders index.
     """
     # If the _cached_order_reviews table is not set, set it
-    global _cached_order_reviews
+    """global _cached_order_reviews
     if _cached_order_reviews is None:
-        _load_cached_order_reviews()
+        _load_order_reviews()"""
 
     return filtered_copy(
-        _cached_order_reviews,
+        Cache.init('order_reviews', _load_order_reviews),
         rows_filter=(orders_index, None)
     )
 
 
-def get_product_categories_v1(index=None):
-    """Get the product categories pk-indexed data table."""
+"""def get_product_categories_v1(index=None):
+    "" "Get the product categories pk-indexed data table." ""
     products = get_products_v1(index=index_of_documented_products_v1())
     counts = products.category_name.value_counts()
     counts = counts.reset_index()
@@ -1204,7 +1213,7 @@ def get_product_categories_v1(index=None):
     categories.loc[71, 'category_name_EN'] = \
         'kitchen_portables_and_food_preparators'
     categories.loc[72, 'category_name_EN'] = 'pc_gamer'
-    return categories if index is None else categories.loc[index]
+    return categories if index is None else categories.loc[index]"""
 
 
 def _load_product_categories():
@@ -1244,15 +1253,15 @@ def _load_product_categories():
     pc.loc[72, 'category_name_EN'] = 'pc_gamer'
 
     # Save to the cache global variable
-    global _cached_product_categories
-    _cached_product_categories = pc
+    #global _cached_product_categories
+    #_cached_product_categories = pc
 
-    return pc.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return pc.copy()  # TODO : remove after filtered_copy bypassing tests
+    return pc
 
 
 def get_product_categories() -> pd.DataFrame:
-    """
-    Returns the pk-indexed product categories data table.
+    """Returns the pk-indexed product categories data table.
 
     The data table is constructed the first time this function is called.
     Subsequent calls return a copy of the data table.
@@ -1261,15 +1270,15 @@ def get_product_categories() -> pd.DataFrame:
         pd.DataFrame: The pk-indexed product categories data table.
     """
     # If the cached _product_categories is not set, set it
-    global _cached_product_categories
+    """global _cached_product_categories
     if _cached_product_categories is None:
-        _load_product_categories()
+        _load_product_categories()"""
 
-    return _cached_product_categories.copy()
+    return Cache.init('product_categories', _load_product_categories).copy()
 
 
-def get_geolocations_v1(index=None):
-    """Get the geolocations pk-indexed data table."""
+"""def get_geolocations_v1(index=None):
+    "" "Get the geolocations pk-indexed data table." ""
     geolocations = get_raw_geolocations()
     geolocations.index.name = 'geolocation_id'
     i = len('geolocation_')
@@ -1279,10 +1288,10 @@ def get_geolocations_v1(index=None):
     cols = geolocations.columns
     new_cols = list(cols[1:3]) + [cols[0]] + list(cols[3:])
     geolocations = geolocations[new_cols]
-    return geolocations if index is None else geolocations.loc[index]
+    return geolocations if index is None else geolocations.loc[index]"""
 
 
-def _load_cached_geolocations():
+def _load_geolocations():
     # Retrieve the raw geolocations data table
     g = get_raw_geolocations()
 
@@ -1298,8 +1307,7 @@ def _load_cached_geolocations():
     g = g[new_cols]
 
     # Cast numerical objects into float :
-    # The conversion to float loses precision with only
-    #  5 significant digits
+    # The conversion to float loses precision with only 5 significant digits
     # against the 15 recorded. This corresponds to a metric precision of
     # the order of a meter, which is more than enough in the context of
     # the application.
@@ -1309,10 +1317,11 @@ def _load_cached_geolocations():
     normalize_city_names(g)
 
     # Save to the cache global variable
-    global _cached_geolocations
-    _cached_geolocations = g
+    #global _cached_geolocations
+    #_cached_geolocations = g
 
-    return g.copy()  # TODO : remove after filtered_copy bypassing tests
+    #return g.copy()  # TODO : remove after filtered_copy bypassing tests
+    return g
 
 
 def get_geolocations() -> pd.DataFrame:
@@ -1330,29 +1339,29 @@ def get_geolocations() -> pd.DataFrame:
         pd.DataFrame: The preprocessed, pk-indexed geolocations data table.
     """
     # If _cached_geolocations is not set, set it
-    global _cached_geolocations
+    """global _cached_geolocations
     if _cached_geolocations is None:
-        _load_cached_geolocations()
+        _load_geolocations()"""
 
-    return _cached_geolocations.copy()
+    return Cache.init('geolocations', _load_geolocations).copy().copy()
 
 
 """ Special cases indexes
 """
 
 
-def index_of_delivered_orders_v1(index=None) -> pd.Index:
-    """Returns the index of orders that have been delivered.
-    """
+"""def index_of_delivered_orders_v1(index=None) -> pd.Index:
+    "" "Returns the index of orders that have been delivered.
+    "" "
     orders = get_orders_v1(index=index)
-    return orders[orders.status == 'delivered'].index
+    return orders[orders.status == 'delivered'].index"""
 
 
-def index_of_undelivered_orders_v1(index=None) -> pd.Index:
-    """Returns the index of orders that have not been delivered.
-    """
+"""def index_of_undelivered_orders_v1(index=None) -> pd.Index:
+    "" "Returns the index of orders that have not been delivered.
+    "" "
     orders = get_orders_v1(index=index)
-    return orders[orders.status != 'delivered'].index
+    return orders[orders.status != 'delivered'].index"""
 
 
 def index_of_delivered_orders(
@@ -1384,14 +1393,14 @@ def index_of_unpaid_orders_v1(index=None):
     ))
 
 
-def customer_location_counts_v1(index=None):
-    """Returns the customer location counts.
+"""def customer_location_counts_v1(index=None):
+    "" "Returns the customer location counts.
 
     DEPRECATED: use `get_customer_location_counts()` instead.
-    """
+    "" "
     customer_orders = get_customer_orders_v1(index=index)
     customer_locs = customer_orders.drop_duplicates()
-    return customer_locs.customer_id.value_counts()
+    return customer_locs.customer_id.value_counts()"""
 
 
 def get_customer_location_counts(
@@ -1409,8 +1418,8 @@ def get_customer_location_counts(
     return counts
 
 
-def index_of_sedentary_customers_v1(index=None):
-    """Returns the index of customers associated with a single location.
+"""def index_of_sedentary_customers_v1(index=None):
+    "" "Returns the index of customers associated with a single location.
 
     DEPRECATED: use `index_of_sedentary_customers()` instead.
 
@@ -1420,9 +1429,9 @@ def index_of_sedentary_customers_v1(index=None):
 
     Returns:
         pd.Index: The index of customers associated with a single location.
-    """
+    "" "
     counts = customer_location_counts_v1(index=index)
-    return counts[counts == 1].index.rename('customer_id')
+    return counts[counts == 1].index.rename('customer_id')"""
 
 
 def index_of_sedentary_customers(
@@ -1443,8 +1452,8 @@ def index_of_sedentary_customers(
     return counts[counts == 1].index
 
 
-def index_of_nomadic_customers_v1(index=None):
-    """Returns the index of customers associated with many locations.
+"""def index_of_nomadic_customers_v1(index=None):
+    " ""Returns the index of customers associated with many locations.
 
     Args:
         orders_index (iterable, optional): The orders index to filter the data
@@ -1452,9 +1461,9 @@ def index_of_nomadic_customers_v1(index=None):
 
     Returns:
         pd.Index: The index of customers associated with many locations.
-    """
+    "" "
     counts = customer_location_counts_v1(index=index)
-    return counts[counts > 1].index.rename('customer_id')
+    return counts[counts > 1].index.rename('customer_id')"""
 
 
 def index_of_nomadic_customers(
@@ -1475,8 +1484,8 @@ def index_of_nomadic_customers(
     return counts[counts > 1].index
 
 
-def index_of_dimensioned_products_v1(index=None):
-    """Returns the index of products that have physical features.
+"""def index_of_dimensioned_products_v1(index=None):
+    "" "Returns the index of products that have physical features.
 
     DEPRECATED: use `index_of_dimensioned_products()` instead.
 
@@ -1486,12 +1495,12 @@ def index_of_dimensioned_products_v1(index=None):
 
     Returns:
         pd.Index: The index of products that have physical features.
-    """
+    "" "
     products = get_products_v1(index=index)
     # Get products where the 'weight_g' column is not null
     bindex = products.weight_g.notna()
     products_subset = products[bindex]
-    return products_subset.index
+    return products_subset.index"""
 
 
 def index_of_dimensioned_products(
@@ -1512,8 +1521,8 @@ def index_of_dimensioned_products(
     return products[products.weight_g.notna()].index
 
 
-def index_of_undimensioned_products_v1(index=None):
-    """Returns the index of products that do not have physical features.
+"""def index_of_undimensioned_products_v1(index=None):
+    "" "Returns the index of products that do not have physical features.
 
     DEPRECATED: use `index_of_undimensioned_products()` instead.
 
@@ -1523,12 +1532,12 @@ def index_of_undimensioned_products_v1(index=None):
 
     Returns:
         pd.Index: The index of products that do not have physical features.
-    """
+    "" "
     products = get_products_v1(index=index)
     # Get products where the 'weight_g' column is null
     bindex = products.weight_g.isna()
     products_subset = products[bindex]
-    return products_subset.index
+    return products_subset.index"""
 
 
 def index_of_undimensioned_products(
@@ -1549,8 +1558,8 @@ def index_of_undimensioned_products(
     return products[products.weight_g.isna()].index
 
 
-def index_of_documented_products_v1(index=None):
-    """Returns the index of products that have marketing features.
+"""def index_of_documented_products_v1(index=None):
+    "" "Returns the index of products that have marketing features.
 
     DEPRECATED: use `index_of_documented_products()` instead.
 
@@ -1560,12 +1569,12 @@ def index_of_documented_products_v1(index=None):
 
     Returns:
         pd.Index: The index of products that have marketing features.
-    """
+    "" "
     products = get_products_v1(index=index)
     # Get products where the 'category_name' column is not null
     bindex = products.category_name.notna()
     products_subset = products[bindex]
-    return products_subset.index
+    return products_subset.index"""
 
 
 def index_of_documented_products(
@@ -1586,8 +1595,8 @@ def index_of_documented_products(
     return products[products.category_name.notna()].index
 
 
-def index_of_undocumented_products_v1(index=None):
-    """Returns the index of products that do not have marketing features.
+"""def index_of_undocumented_products_v1(index=None):
+    "" "Returns the index of products that do not have marketing features.
 
     DEPRECATED: use `index_of_undocumented_products()` instead.
 
@@ -1597,13 +1606,13 @@ def index_of_undocumented_products_v1(index=None):
 
     Returns:
         pd.Index: The index of products that do not have marketing features.
-    """
+    "" "
     # Retrieve the products pk-indexed table
     products = get_products_v1(index=index)
     # Get products where the 'category_name' column is null
     bindex = products.category_name.isna()
     products_subset = products[bindex]
-    return products_subset.index
+    return products_subset.index"""
 
 
 def index_of_undocumented_products(
@@ -1624,14 +1633,14 @@ def index_of_undocumented_products(
     return products[products.category_name.isna()].index
 
 
-def index_of_fully_qualified_products_v1(index=None):
-    """Returns the index of products with all
+"""def index_of_fully_qualified_products_v1(index=None):
+    "" "Returns the index of products with all
     physical and marketing features provided.
-    """
+    " ""
     return (
         index_of_dimensioned_products_v1(index=index)
         .intersection(index_of_documented_products_v1(index=index))
-    )
+    )"""
 
 
 def index_of_fully_qualified_products(
@@ -1650,14 +1659,14 @@ def index_of_fully_qualified_products(
     ].index
 
 
-def index_of_unknown_products_v1(index=None):
-    """Returns the index of products that have no features.
+"""def index_of_unknown_products_v1(index=None):
+    "" "Returns the index of products that have no features.
     DEPRECATED
-    """
+    "" "
     return (
         index_of_undimensioned_products_v1(index=index)
         .intersection(index_of_undocumented_products_v1(index=index))
-    )
+    )"""
 
 
 def index_of_unknown_products(
@@ -1687,8 +1696,37 @@ def index_of_sellers_from_state(
     return sellers[sellers.state == state].index
 
 
-def _min_max_mask(series: pd.Series, min_val: float, max_val: float) -> np.ndarray:
-    mask = None
+def _between_mask(
+    series: pd.Series,
+    min_val: Union[float, datetime, int],
+    max_val: Union[float, datetime, int]
+) -> np.ndarray:
+    """
+    Creates a boolean mask for a given pandas Series, selecting elements
+    within a given range.
+
+    Parameters:
+    - series (pd.Series): The series to create the mask for.
+    - min_val (Union[float, datetime, int]): The lower bound of the range.
+        If None, no lower bound is applied.
+    - max_val (Union[float, datetime, int]): The upper bound of the range.
+        If None, no upper bound is applied.
+
+    Returns:
+    - np.ndarray: A boolean mask for the series with the same shape.
+        The mask is True for elements within the range, False otherwise.
+
+    Example:
+    df = pd.DataFrame({'A':[1,2,3,4,5], 'B':[6,7,8,9,10]})
+    mask = _between_mask(df['A'], 2, 4)
+    df[mask]
+    # Returns:
+    #    A  B
+    # 1  2  7
+    # 2  3  8
+    # 3  4  9
+    """
+    """mask = None
     if not (min_val is None and max_val is None):
         min_mask = None if min_val is None else (series >= min_val)
         max_mask = None if max_val is None else (series <= max_val)
@@ -1698,7 +1736,12 @@ def _min_max_mask(series: pd.Series, min_val: float, max_val: float) -> np.ndarr
             mask = min_mask
         else:
             mask = max_mask
-    return mask
+    return mask"""
+    if min_val is None:
+        min_val = series.min()
+    if max_val is None:
+        max_val = series.max()
+    return series.between(min_val, max_val)  # ((min_val <= series) & (series <= max_val))
 
 
 def index_of_product_categories_by_products_count(
@@ -1707,7 +1750,7 @@ def index_of_product_categories_by_products_count(
 ) -> pd.Index:
     categories = get_product_categories()
 
-    mask = _min_max_mask(categories.products_count, min_count, max_count)
+    mask = _between_mask(categories.products_count, min_count, max_count)
 
     subset = (
         categories if mask is None
@@ -1726,7 +1769,7 @@ def index_of_reviews_by_score(
     order_reviews = _expand_index(get_order_reviews())
     order_reviews.reset_index(0, inplace=True)
 
-    mask = _min_max_mask(order_reviews.score, min_score, max_score)
+    mask = _between_mask(order_reviews.score, min_score, max_score)
 
     subset = (
         order_reviews if mask is None
@@ -2497,6 +2540,32 @@ def get_unique_customers():
     )
 
 
+def get_customer_order_and_review_times():
+    times = get_order_and_review_times()
+    return times.groupby(by=('_ident_', 'customer_id')).mean()
+
+
+def get_customer_satisfaction():
+
+    def weighted_avg(scores: tuple) -> float:
+        sum_s = 0
+        sum_w = 0
+        for s in scores:
+            w = (6 - s)
+            sum_w += w
+            sum_s += w * s
+        return round(sum_s / sum_w, 1)
+
+    customer_satisfaction = (
+        get_customers_orders_reviews()[[('reviews', 'score')]]
+        .groupby(by=('_ident_', 'customer_id'))
+        .agg(weighted_avg)
+    )
+    customer_satisfaction.index.name = 'customer_id'
+    customer_satisfaction.columns = ['satisfaction']
+    return customer_satisfaction
+
+
 """ Aggregating of payments (by order then by customer)
 """
 
@@ -2776,8 +2845,34 @@ def get_first_order_date_v1():
 
 
 def _event_col(
-    event: str
+    event: Union[str, None]
 ) -> str:
+    """Given an event name, return the corresponding column name in the orders
+    dataframe.
+    If event is None, the default column 'purchase_timestamp' will be returned.
+    If event is not in the valid event names, a ValueError will be raised.
+    
+    Parameters:
+        - event (Union[str, None]): The name of the event. Must be one of 
+            ('purchase', 'approval', 'carrier_delivery', 'customer_delivery',
+            'estimated_delivery') or None
+    
+    Returns:
+        - str: the corresponding column name
+    
+    Raises:
+        - ValueError: if `event` is not None and not a valid event name.
+        
+    Example:
+    >>> _event_col("purchase")
+    "purchase_timestamp"
+    >>> _event_col("approval")
+    "approved_at"
+    >>> _event_col(None)
+    "purchase_timestamp"
+    >>> _event_col("not_valid_event")
+    ValueError("not_valid_event is not a valid event name")
+    """
     events_dict = {
         'purchase': 'purchase_timestamp',
         'approval': 'approved_at',
@@ -2789,7 +2884,7 @@ def _event_col(
         return events_dict['purchase']
     if event in events_dict:
         return events_dict[event]
-    return ''
+    raise ValueError(f"{event} is not a valid event name")
 
 
 def get_first_order_date(
@@ -2808,6 +2903,48 @@ def get_last_order_date(
     """Get the last order date.
     """
     return get_orders(orders_index)[_event_col(event)].max()
+
+
+def get_earliest_relevant_date() -> datetime:
+    return datetime(2017, 1, 25)
+
+
+def get_latest_relevant_date() -> datetime:
+    return datetime(2018, 8, 21)
+
+
+def filter_by_dates_in_orders(
+    with_orders_data: pd.DataFrame,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    event: Optional[str] = None
+) -> pd.DataFrame:
+    """Filter the given DataFrame containing orders based on date range
+    and event type.
+
+    Parameters:
+    - with_orders_data (pd.DataFrame):
+        The DataFrame containing the orders data
+    - from_date (datetime, optional):
+        The start date of the date range.
+        If not provided, the date range will start from the earliest date
+        in the data.
+    - to_date (datetime, optional): The end date of the date range.
+        If not provided, the date range will end at the latest date
+        in the data.
+    - event (str, optional): The event type.
+        If not provided, 'purchase' will be used as default.
+
+    Returns:
+    - pd.DataFrame: The filtered DataFrame containing the orders data
+
+    Raises:
+    - ValueError: If the provided event type is not valid
+    """
+    event_col = _event_col(event)
+    event_dates = with_orders_data['orders'][event_col]
+    between_mask = _between_mask(event_dates, from_date, to_date)
+    return with_orders_data[between_mask]
 
 
 def get_order_ages_v0(now):
@@ -2857,7 +2994,7 @@ def get_order_ages_v1(
     )
 
 
-def get_order_event_ages(
+def get_order_event_age(
     present_date: Optional[datetime] = datetime.now(),
     orders_index: Optional[Iterable] = None,
     from_date: Optional[datetime] = None,
@@ -2865,6 +3002,7 @@ def get_order_event_ages(
     event: Optional[str] = None
 ) -> pd.Series:
     """
+    DEPRECATED : use `get_order_events_recency` instead
     Return the age of orders placed between the given
     `from_date` and `to_date` dates.
     If no dates are given, the function will use
@@ -2894,6 +3032,60 @@ def get_order_event_ages(
     event_dates = event_dates[between_dates]
 
     return (present_date - event_dates).sort_values(ascending=False)
+
+
+def get_order_events_recency(
+    with_orders_data: pd.DataFrame,
+    relative_to_date: Optional[datetime] = None,
+    events: Optional[Union[List[str], str, None]] = None
+) -> pd.DataFrame:
+    """
+    Compute the recency of order events relative to a given date.
+
+    Parameters:
+    - with_orders_data (pd.DataFrame): Dataframe containing order data.
+    - events (Optional[Union[List[str], None]]): List of events to compute
+        the recency for, if None, recency for all events are computed.
+    - relative_to_date (Optional[datetime]): The date to compute recency
+        relative to, if None, default is the current date.
+
+    Returns:
+    - pd.DataFrame: Dataframe with recency of events.
+
+    Example:
+    ```
+    >>> events_recency = get_order_events_recency(
+    >>>     with_orders_data,
+    >>>     relative_to_date=datetime(2022,1,1)
+    >>>     events=['purchase', 'approval'],
+    >>> )
+    >>> events_recency
+    ```
+    """
+    if relative_to_date is None:
+        relative_to_date = datetime.now()
+
+    if events is None:
+        events = [
+            'purchase', 'approval', 'carrier_delivery',
+            'customer_delivery', 'estimated_delivery'
+        ]
+    elif isinstance(events, str):
+        events = [events]
+
+    events_cols = [_event_col(event) for event in events]
+    events_dates = with_orders_data['orders'][events_cols]
+    events_ages = events_dates.applymap(lambda x: relative_to_date - x)
+    events_ages.columns = pd.MultiIndex.from_tuples(
+        [
+            (
+                f"recency relative to {relative_to_date}",
+                event + '_recency'
+            ) for event in events
+        ]
+    )
+
+    return events_ages
 
 
 """ Derived features : order times
@@ -2975,14 +3167,19 @@ def get_order_times_v1(index=None):
 
 
 def get_order_times(
-    orders_index: Optional[Iterable] = None
+    orders_index: Optional[Iterable] = None,
+    normalize=True
 ) -> pd.DataFrame:
     """Get a DataFrame of order times data.
     """
     orders = get_orders(orders_index=orders_index)
 
-    def time_diff(data, from_date, to_date, name):
-        return (data[to_date] - data[from_date]).rename(name)
+    def time_diff(data, from_date, to_date, name, normalize=True):
+        if normalize:
+            oneday = pd.Timedelta(days=1)
+            return ((data[to_date] - data[from_date]) / oneday).rename(name)
+        else:
+            return (data[to_date] - data[from_date]).rename(name)
 
     t1 = 'purchase_timestamp'
     t2 = 'approved_at'
@@ -3002,17 +3199,70 @@ def get_order_times(
     dt45 = 'delivery_advance_time'
 
     return pd.concat([
-        time_diff(orders, t1, t2, dt12),
-        time_diff(orders, t1, t3, dt13),
-        time_diff(orders, t1, t4, dt14),
-        time_diff(orders, t1, t5, dt15),
-        time_diff(orders, t2, t3, dt23),
-        time_diff(orders, t2, t4, dt24),
-        time_diff(orders, t2, t5, dt25),
-        time_diff(orders, t3, t4, dt34),
-        time_diff(orders, t3, t5, dt35),
-        time_diff(orders, t4, t5, dt45),
+        time_diff(orders, t1, t2, dt12, normalize),
+        time_diff(orders, t1, t3, dt13, normalize),
+        time_diff(orders, t1, t4, dt14, normalize),
+        time_diff(orders, t1, t5, dt15, normalize),
+        time_diff(orders, t2, t3, dt23, normalize),
+        time_diff(orders, t2, t4, dt24, normalize),
+        time_diff(orders, t2, t5, dt25, normalize),
+        time_diff(orders, t3, t4, dt34, normalize),
+        time_diff(orders, t3, t5, dt35, normalize),
+        time_diff(orders, t4, t5, dt45, normalize),
     ], axis=1)
+
+
+def get_order_and_review_times(
+    orders_index: Optional[Iterable] = None,
+    normalize=True
+) -> pd.DataFrame:
+    """Get a DataFrame of order (review included) times data.
+    """
+    cor = get_customers_orders_reviews(orders_index=orders_index)
+
+    def time_diff(data, from_date, to_date, name, normalize=True):
+        if normalize:
+            oneday = pd.Timedelta(days=1)
+            return ((data[to_date] - data[from_date]) / oneday).rename(name)
+        else:
+            return (data[to_date] - data[from_date]).rename(name)
+
+    t1 = ('orders', 'purchase_timestamp')
+    t2 = ('orders', 'approved_at')
+    t3 = ('orders', 'delivered_carrier_date')
+    t4 = ('orders', 'delivered_customer_date')
+    t5 = ('orders', 'estimated_delivery_date')
+    t6 = ('reviews', 'creation_date')
+    t7 = ('reviews', 'answer_timestamp')
+
+    dt12 = 'approval_time'
+    dt13 = 'carrier_delivering_time'
+    dt14 = 'customer_delivering_time'
+    dt15 = 'processing_estimated_time'
+    dt23 = 'approval_to_carrier_delivery_time'
+    dt24 = 'approval_to_customer_delivery_time'
+    dt25 = 'approval_to_estimated_delivery_time'
+    dt34 = 'transit_time'
+    dt35 = 'estimated_transit_time'
+    dt45 = 'delivery_advance_time'
+    dt46 = 'delivery_to_review_time'
+    dt67 = 'review_time'
+
+    return pd.concat([
+        time_diff(cor, t1, t2, dt12, normalize),
+        time_diff(cor, t1, t3, dt13, normalize),
+        time_diff(cor, t1, t4, dt14, normalize),
+        time_diff(cor, t1, t5, dt15, normalize),
+        time_diff(cor, t2, t3, dt23, normalize),
+        time_diff(cor, t2, t4, dt24, normalize),
+        time_diff(cor, t2, t5, dt25, normalize),
+        time_diff(cor, t3, t4, dt34, normalize),
+        time_diff(cor, t3, t5, dt35, normalize),
+        time_diff(cor, t4, t5, dt45, normalize),
+        time_diff(cor, t4, t6, dt46, normalize),
+        time_diff(cor, t6, t7, dt67, normalize),
+    ], axis=1)
+
 
 
 """ Derived features : R, F, M
@@ -3034,7 +3284,7 @@ def _event_dating_args(kwargs: dict) -> dict:
     }
 
 
-def get_customer_order_recency_v1(
+"""def get_customer_order_recency_v1(
         from_date=get_first_order_date(),
         to_date=get_last_order_date()
 ):
@@ -3049,10 +3299,10 @@ def get_customer_order_recency_v1(
 
     customer_recency = copab.drop_duplicates(subset='customer_unique_id')
     customer_recency = customer_recency.set_index('customer_unique_id')
-    return customer_recency
-   
+    return customer_recency"""
 
-"""def get_customer_order_recency(
+
+"""def get_customer_order_recency_v2(
     customers_index: Optional[Iterable] = None,
     orders_index: Optional[Iterable] = None,
     present_date: Optional[datetime] = datetime.now(),
@@ -3063,9 +3313,9 @@ def get_customer_order_recency_v1(
 
     kwargs = locals()
     customer_payments = get_customer_payments(_index_args(kwargs))
-    order_ages = get_order_event_ages(_event_dating_args(kwargs))
+    order_ages = get_order_event_age(_event_dating_args(kwargs))
 
-    event_dates = orders[_event_col(event)]
+    event_dates = order_ages[_event_col(event)]
 
     between_dates = (
         (from_date <= event_dates)
@@ -3075,12 +3325,26 @@ def get_customer_order_recency_v1(
     event_dates = event_dates[between_dates]"""
 
 
+def get_customer_orders_recency(
+    relative_to_date: Optional[datetime] = datetime.now(),
+    customers_index: Optional[Iterable] = None,
+    orders_index: Optional[Iterable] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    event: Optional[str] = 'purchase'
+) -> pd.DataFrame:
+    co = get_customers_orders(orders_index, customers_index)
+    filtered_co = filter_by_dates_in_orders(co, from_date, to_date, event)
+    recency = get_order_events_recency(filtered_co, relative_to_date, event)
+    recency = recency.groupby(by=('_ident_', 'customer_id')).min()
+    return recency
 
-def get_customer_order_freqs_and_amount(
+
+"""def get_customer_order_freqs_and_amount_v1(
         from_date=get_first_order_date(),
         to_date=get_last_order_date()
 ):
-    """
+    "" "
     Returns a DataFrame containing the customer
     unique id and the order recency for each customer.
 
@@ -3094,7 +3358,7 @@ def get_customer_order_freqs_and_amount(
 
     The `from_date` and `to_date` parameters must be strings
     in the ISO 8601 format, such as "2022-12-18".
-    """
+    "" "
     cop = get_customer_order_payments_v1()
     is_cop_between = (
         (from_date <= cop.order_purchase_timestamp)
@@ -3107,14 +3371,50 @@ def get_customer_order_freqs_and_amount(
     })
     gpby.columns = ['order_count', 'order_amount']
     gpby = gpby.sort_values(by='order_count', ascending=False)
-    return gpby
+    return gpby"""
 
 
-def get_customer_RFM(
+def get_customer_orders_amount_and_frequency(
+    customers_index: Optional[Iterable] = None,
+    orders_index: Optional[Iterable] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    event: Optional[str] = 'purchase'
+) -> pd.DataFrame:
+    cop = get_customers_orders_payments(orders_index, customers_index)
+    filtered_cop = filter_by_dates_in_orders(cop, from_date, to_date, event)
+    cop_payments = filtered_cop[[('payments', 'value')]].reset_index(1)
+
+    def keep_it(x):
+        return x[0]
+    cop_order_payments = (
+        cop_payments
+        .groupby(by=('_ident_', 'order_id'))
+        .aggregate({
+            ('_ident_', 'customer_id'): keep_it,
+            ('payments', 'value'): 'sum'
+        })
+    )
+
+    cop_customer_orders_payments = (
+        cop_order_payments
+        .groupby(by=('_ident_', 'customer_id'))
+        .agg(['count', 'sum'])
+    )
+
+    cop_customer_orders_payments.columns = pd.MultiIndex.from_tuples([
+        ('customer_orders', 'frequency'),
+        ('customer_orders', 'amount')
+    ])
+
+    return cop_customer_orders_payments
+
+
+"""def get_customer_RFM_v1(
         from_date=get_first_order_date(),
         to_date=get_last_order_date()
 ):
-    """
+    " ""
     Return a dataframe containing
     RFM (Recency, Frequency, Monetary) values for each customer.
 
@@ -3124,9 +3424,9 @@ def get_customer_RFM(
     Returns:
     A dataframe with columns ['R', 'F', 'M']
     containing the RFM values for each customer.
-    """
+    "" "
     cor = get_customer_order_recency_v1(from_date, to_date)
-    cofa = get_customer_order_freqs_and_amount(from_date, to_date)
+    cofa = get_customer_order_freqs_and_amount_v1(from_date, to_date)
     crfm = pd.merge(
         cor[['order_age']], cofa,
         how='outer', on='customer_unique_id'
@@ -3134,7 +3434,150 @@ def get_customer_RFM(
     crfm.columns = ['R', 'F', 'M']
     oneday = pd.Timedelta(days=1)
     crfm.R = crfm.R / oneday
-    return crfm
+    return crfm"""
+
+
+def get_customer_RFM(
+    relative_to_date: Optional[datetime] = datetime.now(),
+    customers_index: Optional[Iterable] = None,
+    orders_index: Optional[Iterable] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    event: Optional[str] = 'purchase'
+) -> pd.DataFrame:
+    recency = get_customer_orders_recency(
+        relative_to_date=relative_to_date,
+        customers_index=customers_index,
+        orders_index=orders_index,
+        from_date=from_date,
+        to_date=to_date,
+        event=event
+    )
+
+    amount_and_frequency = get_customer_orders_amount_and_frequency(
+        customers_index=customers_index,
+        orders_index=orders_index,
+        from_date=from_date,
+        to_date=to_date,
+        event=event
+    )
+    customer_rfm = pd.merge(
+        recency, amount_and_frequency,
+        left_index=True, right_index=True,
+        how='outer'
+    )
+
+    customer_rfm.columns = ['R', 'F', 'M']
+    customer_rfm.index.name = 'customer_id'
+    oneday = pd.Timedelta(days=1)
+    customer_rfm.R = customer_rfm.R / oneday
+
+    return customer_rfm
+
+
+""" Territorial features
+"""
+
+
+def sort_cols_by_freq(data: pd.DataFrame) -> pd.DataFrame:
+    """Returns `data` with columns sorted by decreasing frequency.
+
+    Args:
+        - data (pd.DataFrame):
+            DataFrame to sort columns by decreasing frequency.
+
+    Returns:
+        - pd.DataFrame:
+            DataFrame with columns sorted by decreasing frequency.
+    """
+    data.loc['sum'] = data.sum(axis=0)
+    sorted_data = data.T.sort_values(by='sum', ascending=False).T
+    sorted_data = sorted_data.drop(index='sum')
+    return sorted_data
+
+
+def hot_encode_catvar(
+    data: pd.DataFrame,
+    cat_var: str,
+    new_name: Optional[str] = None,
+    abstractor: Optional[Callable] = None,
+    sort: Optional[bool] = True
+) -> pd.DataFrame:
+    """Returns one-hot-encoded dataframe of `cat_var` with columns sorted
+    by decreasing frequency.
+
+    Args:
+        data (DataFrame):
+            Dataframe containing the categorical variable.
+        cat_var (str):
+            The categorical variable to one-hot-encode.
+        new_name (str, optional):
+            The new column name for the encoded variable.
+        abstractor (callable, optional):
+            Function to apply on the categorical variable before encoding.
+        sort (bool, optional):
+            Whether to sort the columns by decreasing frequency.
+    """
+    # make a copy of the categorical variable and rename
+    # if new_name is provided
+    cats = data[[cat_var]].copy()
+    if new_name is not None:
+        cat_var = new_name
+        cats.columns = [cat_var]
+    # apply the abstractor function if provided
+    if abstractor is not None:
+        cats[cat_var] = cats[cat_var].apply(abstractor)
+    # perform one-hot-encoding
+    ohe = OneHotEncoder(handle_unknown='ignore').fit(cats)
+    ohe_data = pd.DataFrame.sparse.from_spmatrix(
+        ohe.transform(cats),
+        index=cats.index,
+        columns=ohe.get_feature_names_out()
+    ).sparse.to_dense()    # to avoid many warnings
+    # sort columns by decreasing frequency if sort is True
+    return sort_cols_by_freq(ohe_data) if sort else ohe_data
+
+
+def get_customer_states_ohe(
+    customers_index: Optional[Iterable] = None,
+    orders_index: Optional[Iterable] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    event: Optional[str] = 'purchase'
+) -> pd.DataFrame:
+    """Returns one-hot encoded states of customers based on their
+    purchase history filtered by the given dates and event.
+
+    Args:
+    - customers_index : Iterable, The index of the customers to consider
+    - orders_index : Iterable, The index of the orders to consider
+    - from_date : datetime, The starting date to consider.
+    - to_date : datetime, The ending date to consider.
+    - event : str, The type of event to filter by.
+
+    Returns:
+    - pd.DataFrame, One-hot encoded states of customers
+    """
+    co = get_customers_orders(orders_index, customers_index)
+    co_dt = filter_by_dates_in_orders(co, from_date, to_date, event)
+    co_dt_locs = (
+        co_dt
+        .reset_index()
+        [[
+            ('_ident_', 'customer_id'),
+            ('customers', 'state')
+        ]]
+        .drop_duplicates(subset=('_ident_', 'customer_id'))
+    )
+    co_dt_locs.columns = ['customer_id', 'state']
+    co_dt_locs.set_index('customer_id', inplace=True)
+    # returns the state one hot encoding
+    return hot_encode_catvar(
+        co_dt_locs,
+        'state',
+        # new_name='btype',
+        # abstractor=abstractor
+    )
 
 
 def get_product_physical_features(
@@ -3419,19 +3862,27 @@ def plot_kmeans_rfm_clusters(
         clu_labels=clu_labels
     )
 
-    plt.tight_layout()
-
     plt.suptitle(
         f'{n_clusters}-Means clusters',
         fontsize=14,
         fontweight='bold',
         y=1.05,
     )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        f'../img/{n_clusters}-Means RFM clusters.png',
+        facecolor='white',
+        bbox_inches='tight',
+        dpi=300   # x 2
+    )
+
     plt.show()
 
 
 def plot_kmeans_rfm_clusters_v2(
-        rfm, rfm_labels,
+        crfm, rfm_labels,
         clu_labels, clu_centers,
         slh_avg, slh_vals
 ):
@@ -3448,8 +3899,9 @@ def plot_kmeans_rfm_clusters_v2(
     - slh_vals (array): The silhouette score for each sample.
     """
     n_clusters = len(np.unique(clu_labels))
-    r, f, m = rfm[0], rfm[1], rfm[2]
+    r, f, m = crfm.R.values, crfm.F.values, crfm.M.values
     r_label, f_label, m_label = rfm_labels[0], rfm_labels[1], rfm_labels[2]
+
     r_centers, f_centers, m_centers = (
         clu_centers[:, 0],
         clu_centers[:, 1],
@@ -3512,7 +3964,7 @@ def plot_kmeans_rfm_clusters_v2(
     plt.show()
 
 
-def kmeans_clustering(crfm, k, normalize=False):
+def kmeans_clustering_v1(crfm, k, normalize=False):
     """
     Perform K-Means clustering on customer RFM data.
     Parameters
@@ -3579,17 +4031,24 @@ def kmeans_clustering_v2(crfm, k, normalize=False):
     kmeans.fit_predict(X)
     km_t += time.time()
     clu_labels = kmeans.labels_
-    # clu_centers = kmeans.cluster_centers_
-    # rfm = r, f, m = crfm.R, crfm.F, crfm.M
-    # rfm = crfm.R, crfm.F, crfm.M
-    # rfm_labels = r_label, f_label, m_label = \
-    # 'Recency', 'Frequency', 'Monetary'
-    # rfm_labels = 'Recency', 'Frequency', 'Monetary'
-    """rfm_centers = r_centers, f_centers, m_centers = (
-        clu_centers[:, 0],
-        clu_centers[:, 1],
-        clu_centers[:, 2],
-    )"""
+    clu_centers = get_centers_v2(crfm, clu_labels)
+    return kmeans, clu_labels, clu_centers, km_t
+
+
+def kmeans_clustering(crfm, k, normalize=False):
+    km_t = -time.time()
+    # Normalize the data
+    if normalize:
+        crfm = pd.DataFrame(
+            StandardScaler().fit_transform(crfm),
+            index=crfm.index,
+            columns=crfm.columns
+        )
+
+    kmeans = KMeans(n_clusters=k, random_state=42)
+    kmeans.fit_predict(crfm)
+    km_t += time.time()
+    clu_labels = kmeans.labels_
     clu_centers = get_centers_v2(crfm, clu_labels)
     return kmeans, clu_labels, clu_centers, km_t
 
@@ -3615,7 +4074,7 @@ def kmeans_analysis(crfm, k):
     """
     (
         _, clu_labels, rfm, rfm_labels, rfm_centers, km_t
-    ) = kmeans_clustering(crfm, k)
+    ) = kmeans_clustering_v1(crfm, k)
     slh_t = -time.time()
     slh_avg = silhouette_score(crfm, clu_labels)
     slh_vals = silhouette_samples(crfm, clu_labels)
@@ -3628,6 +4087,44 @@ def kmeans_analysis(crfm, k):
     print('k-means fit time :', round(km_t, 3))
     print('silouhette compute time :', round(slh_t, 3))
     return slh_avg, km_t, slh_t
+
+
+def kmeans_analysis_v2(crfm, k, normalize=False):
+    """Perform k-means clustering analysis on
+    a customer RFM (recency, frequency, monetary value) dataset.
+
+    Parameters:
+
+        crfm (DataFrame):
+            RFM dataset with customer-level scores
+            for recency, frequency, and monetary value
+
+        k (int):
+            Number of clusters to use in k-means clustering
+
+    Returns:
+
+        tuple:
+            A tuple containing the silhouette average, k-means fit time,
+            and silhouette compute time
+    """
+    (
+        kmeans, clu_labels, clu_centers, km_t
+    ) = kmeans_clustering(crfm, k, normalize=normalize)
+    slh_t = -time.time()
+    slh_avg = silhouette_score(crfm, clu_labels)
+    slh_vals = silhouette_samples(crfm, clu_labels)
+    slh_t += time.time()
+    plot_kmeans_rfm_clusters_v2(
+        crfm, ('Recency', 'Frequency', 'Monetary'),
+        clu_labels, clu_centers,
+        slh_avg, slh_vals
+    )
+    plt.show()
+    print('silhouette average :', round(slh_avg, 3))
+    print('k-means fit time :', round(km_t, 3))
+    print('silouhette compute time :', round(slh_t, 3))
+    return kmeans, clu_labels, clu_centers, slh_avg, km_t, slh_t
 
 
 def classes_labeling_v1(rfm, classes_def):
@@ -3738,8 +4235,9 @@ def clusters_business_analysis(crfm, k, classes_def):
     # k-Means clustering
     (
         kmeans, clu_labels, rfm, rfm_labels, rfm_centers, km_t
-    ) = kmeans_clustering(crfm, k)
+    ) = kmeans_clustering_v1(crfm, k)
     r_label, f_label, m_label = rfm_labels
+
     # Labeling
     print_subtitle('Labeling')
     crfm_labeled = pd.concat([
@@ -3747,10 +4245,12 @@ def clusters_business_analysis(crfm, k, classes_def):
         crfm
     ], axis=1)
     display(crfm_labeled)
+
     # Cluster cardinalities
     print_subtitle('Cluster cardinalities')
     clu_counts = crfm_labeled.k_clu.value_counts()
     display(clu_counts)
+
     # Cluster per feature stats
     print_subtitle('Cluster per feature stats')
     gpby = crfm_labeled.groupby(by='k_clu').agg(
@@ -3777,14 +4277,15 @@ def clusters_business_analysis(crfm, k, classes_def):
     turnover = pd.concat([turnover_abs, turnover_rel], axis=1)
     display(turnover)
     display(m_gpby.M)
+
     # Hypercubic roughing of the domain
     print_subtitle('Hypercubic roughing of the domain')
     gpby_3 = crfm_labeled.groupby(by='k_clu').agg(
         ['min', 'max']
     )
     display(gpby_3)
+
     # Manual sterotyping
-    import numpy as np
     print_subtitle('Manual sterotyping')
     cla_labels = classes_labeling_v1(crfm, classes_def)
     crfm_mlabeled = pd.concat([
@@ -3792,9 +4293,11 @@ def clusters_business_analysis(crfm, k, classes_def):
         crfm
     ], axis=1)
     display(crfm_mlabeled)
+
     # Compare cluster (machine learning) | classes (manual)
     print_subtitle('Compare cluster (machine learning) | classes (manual)')
     cla_counts = crfm_mlabeled.k_cla.value_counts()
+
     # display(cla_counts)
     cl_comp = pd.concat([clu_counts, cla_counts], axis=1)
     display(cl_comp)
@@ -4755,13 +5258,19 @@ def plot_kmeans_rfm_clusters_and_classes(
     plt.show()
 
 
-def select_k_with_anova(
+""" Search for the optimal k
+"""
+
+
+def select_k_with_anova_v1(
     crfm,
     k_min=2, k_max=20,
     metric='inertia',
-    verbose=False
+    verbose=False,
+    color='purple'
 ):
     """
+    DEPRECATED
     Select the optimal number of clusters using ANOVA and the elbow method.
     Parameters
     ----------
@@ -4795,7 +5304,7 @@ def select_k_with_anova(
     # Loop over k values
     for k in k_values:
         # Create a KMeans model with k clusters
-        kmeans, clu_labels, _, _, _, km_t = kmeans_clustering(crfm, k)
+        kmeans, clu_labels, _, _, _, km_t = kmeans_clustering_v1(crfm, k)
         if verbose:
             print(
                 f'Time for kmeans_clustering with k={k} :',
@@ -4814,7 +5323,8 @@ def select_k_with_anova(
         anova_scores.append(score)
 
     # Plot the scores
-    plt.plot(k_values, anova_scores)
+    plt.plot(k_values, anova_scores, color=color)
+    plt.fill_between(k_values, anova_scores, color=color, alpha=0.2)
     plt.xlabel('Number of clusters')
     plt.xticks(k_values)
     if metric == 'inertia':
@@ -4833,7 +5343,95 @@ def select_k_with_anova(
     return k"""
 
 
-def select_k_with_davies_bouldin(X, k_min=2, k_max=20):
+def select_k_with_anova(
+    crfm,
+    normalize=False,
+    k_min=2, k_max=20,
+    metric='inertia',
+    color='purple',
+    verbose=False
+):
+    """
+    Select the optimal number of clusters using ANOVA and the elbow method.
+    Parameters
+    ----------
+    crfm: Pandas DataFrame
+        DataFrame with columns 'R', 'F', and 'M' representing
+        recency, frequency, and monetary value of customer orders.
+    k_min: int, optional (default=2)
+        Minimum number of clusters to test.
+    k_max: int, optional (default=20)
+        Maximum number of clusters to test.
+    metric: str, optional (default='inertia')
+        Metric to use for the ANOVA. Can be either 'inertia' or 'silhouette'.
+    verbose: bool, optional (default=True)
+        Whether to print the time taken to fit and predict
+        with the KMeans model for each value of k.
+    Returns
+    -------
+    k: int
+        Optimal number of clusters.
+    """
+    # Normalize the data
+    if normalize:
+        crfm = pd.DataFrame(
+            StandardScaler().fit_transform(crfm),
+            index=crfm.index,
+            columns=crfm.columns
+        )
+
+    # Create a list of k values to test
+    k_values = list(range(k_min, k_max+1))
+
+    # Initialize lists to store the scores
+    anova_scores = []
+
+    # Loop over k values
+    for k in k_values:
+        # Create a KMeans model with k clusters
+        kmeans, clu_labels, _, km_t = kmeans_clustering(crfm, k)
+        if verbose:
+            print(
+                f'Time for kmeans_clustering with k={k} :',
+                round(km_t, 3), 's'
+            )
+
+        # Calculate the anova score for the current model
+        if metric == 'inertia':
+            score = kmeans.inertia_
+        elif metric == 'silhouette':
+            score = silhouette_score(crfm, clu_labels)
+        else:
+            raise ValueError('Invalid metric')
+
+        # Append the score to the list
+        anova_scores.append(score)
+
+    # Plot the scores
+    plt.plot(k_values, anova_scores, color=color)
+    plt.fill_between(k_values, anova_scores, color=color, alpha=0.2)
+    plt.xlabel('Number of clusters')
+    plt.xticks(k_values)
+    if metric == 'inertia':
+        plt.ylabel('Inertia')
+    elif metric == 'silhouette':
+        plt.ylabel('Silhouette Score')
+    norm_status = ', not scaled'
+    if normalize:
+        norm_status = ', scaled'
+    plt.title(f'ANOVA with Elbow Method ({metric}{norm_status})', weight='bold')
+
+    plt.savefig(
+        f'../img/ANOVA with Elbow Method_{metric}{norm_status}.png',
+        facecolor='white',
+        bbox_inches='tight',
+        dpi=300   # x 2
+    )
+
+    plt.show()
+
+
+def select_k_with_davies_bouldin(crfm, normalize=False, k_min=2, k_max=20):
     """Calculate the Davies-Bouldin index for each value of k
     and plot the results as a bar chart.
 
@@ -4844,14 +5442,18 @@ def select_k_with_davies_bouldin(X, k_min=2, k_max=20):
     k_min, k_max : int
         The minimum and maximum number of clusters to consider.
     """
+    # Normalize the data
+    if normalize:
+        crfm[crfm.columns].loc[:, :] = StandardScaler().fit_transform(crfm)
+
     # Create a list of k values to test
     k_values = list(range(k_min, k_max+1))
 
     scores = []
     for k in k_values:
         kmeans = KMeans(n_clusters=k)
-        kmeans.fit(X)
-        scores.append(davies_bouldin_score(X, kmeans.labels_))
+        kmeans.fit(crfm)
+        scores.append(davies_bouldin_score(crfm, kmeans.labels_))
 
     # Sort the scores in descending order
     scores_sorted = sorted(scores)
@@ -4867,5 +5469,201 @@ def select_k_with_davies_bouldin(X, k_min=2, k_max=20):
     for i in range(3):
         best_k = scores.index(scores_sorted[i]) + k_min
         plt.bar(best_k, scores[best_k-k_min], color='green')
+
+    norm_status = ', not scaled'
+    if normalize:
+        norm_status = ', scaled'
+    plt.title(f'Davis-Bouldin index{norm_status}', weight='bold')
+
+    plt.savefig(
+        f'../img/Davis-Bouldin index{norm_status}.png',
+        facecolor='white',
+        bbox_inches='tight',
+        dpi=300   # x 2
+    )
+
+    plt.show()
+
+
+""" Maintenance contract
+"""
+
+
+def daterange(
+    start_date: datetime,
+    end_date: datetime,
+    step: Optional[timedelta] = None,
+    num_steps: Optional[int] = None
+) -> np.ndarray:
+    """Returns an array of datetime objects starting from start_date and
+    ending at end_date with a fixed step size. The step size can be specified
+    either as a timedelta object or as the number of steps. If both `step` and
+    `num_steps` are provided, an error will be raised.
+    If neither step nor num_steps are provided, an error will be raised.
+
+    Parameters:
+        start_date (datetime): The starting date for the date range.
+        end_date (datetime): The ending date for the date range.
+        step (timedelta, optional): The step size as a timedelta object.
+        num_steps (int, optional): The number of steps between `start_date`
+        and `end_date`.
+
+    Returns:
+        np.ndarray: An array of datetime objects.
+
+    Example:
+        >>> daterange(
+        >>>     datetime(2020,1,1),
+        >>>     datetime(2020,1,3),
+        >>>     timedelta(days=1)
+        >>> )
+        array([
+            datetime.datetime(2020, 1, 1, 0, 0),
+            datetime.datetime(2020, 1, 2, 0, 0),
+            datetime.datetime(2020, 1, 3, 0, 0)
+        ], dtype=object)
+        >>> daterange(datetime(2020,1,1), datetime(2020,1,3), num_steps=2)
+        array([
+            datetime.datetime(2020, 1, 1, 0, 0),
+            datetime.datetime(2020, 1, 2, 12, 0)
+        ], dtype=object)
+    """
+    if step is None and num_steps is None:
+        raise ValueError('You must specify either step or num_steps')
+    if step is not None and num_steps is not None:
+        raise ValueError('You cannot specify both step and num_steps')
+    if step is None:
+        step = (end_date - start_date) / num_steps
+    return np.array([
+        start_date + i * step
+        for i in range(ceil((end_date - start_date) / step) + 1)
+    ])
+
+
+def get_time_slices_dict(
+    from_date: datetime,
+    to_date: datetime,
+    step_in_days: int,
+    cumul: Optional[bool] = True
+) -> dict:
+    """Returns a dictionary where keys are the end dates of time intervals
+    and values are a dict containing the start date, end date,
+    number of orders and number of customers in the interval,
+    as well as the indexes of orders and customers for that interval.
+    Time intervals are defined by the given start and end dates
+    and the step in days.
+
+    Args:
+        - from_date (datetime): start date of the time intervals
+        - to_date (datetime): end date of the time intervals
+        - step_in_days (int): the number of days in each time interval
+    Returns:
+        - slices_dict (dict): a dict containing time intervals informations
+    """
+    # Calculate time intervals
+    oneday = pd.Timedelta(days=1)
+    td_in_days = step_in_days * oneday
+    section_dates = daterange(from_date, to_date, step=td_in_days)
+
+    # Create dictionary of data slices by time interval
+    # where keys are the end dates of intervals (date as index)
+
+    # use tee to duplicate the list
+    start_dates, end_dates = tee(section_dates)
+
+    # init the dict using islice to iterate over successive pairs of dates
+    slices_dict = {
+        end_date: {'start_date': start_date, 'end_date': end_date}
+        for start_date, end_date
+        in zip(start_dates, islice(end_dates, 1, None))
+    }
+
+    # complete with customers and orders indexes slices
+    co = get_customers_orders()
+    co.index.names = ['order_id', 'customer_id']
+    for end_date, slice in slices_dict.items():
+        start_date = from_date
+        if not cumul:
+            start_date = slice['start_date']
+        co_dt = filter_by_dates_in_orders(co, start_date, end_date)
+        co_dt_index = co_dt.index.to_frame()
+        orders_index = co_dt_index.order_id.drop_duplicates()
+        customers_index = co_dt_index.customer_id.drop_duplicates()
+        slice['# orders'] = orders_index.size
+        slice['# customers'] = customers_index.size
+        slice['orders_index'] = orders_index
+        slice['customers_index'] = customers_index
+
+    return slices_dict
+
+
+def show_orders_by_period(
+    slices_dict: Dict,
+    step_in_days: int,
+    min_date: Optional[datetime] = None,
+    max_date: Optional[datetime] = None,
+    cumul: Optional[bool] = True
+):
+    """Create a graph showing the number of orders for a given time period.
+
+    Args:
+        - slices_dict (Dict):
+            A dictionary containing the time slices, with keys as end date of
+            the slice and values including the start date, end date,
+            the number of orders and indexes of orders and customers
+            for each slice.
+        - step_in_days (int):
+            The size of the time slices in days.
+        - min_date (datetime, optional):
+            The earliest date to display on the graph. Defaults to None.
+        - max_date (datetime, optional):
+            The latest date to display on the graph. Defaults to None.
+    """
+    o_b_p = pd.DataFrame([
+        (end_date, slice['# orders'])
+        for end_date, slice in slices_dict.items()
+    ])
+    o_b_p.columns = ['end_date', 'Count of orders']
+    o_b_p.set_index('end_date', inplace=True)
+
+    counts = o_b_p['Count of orders']
+    y_max = counts.max()
+
+    _, ax = plt.subplots(figsize=(16, 9))
+    o_b_p.plot(ax=ax, color='green', lw=2)
+    plt.fill_between(o_b_p.index, counts, color='green', alpha=0.2)
+    count_type = 'Cumulative count' if cumul else 'Count'
+    plt.title(
+        f'{count_type} of orders by period of {step_in_days} days',
+        weight='bold'
+    )
+    plt.xlabel('')
+
+    # The vertical line for the earliest relevant date
+    if min_date is not None:
+        plt.axvline(x=min_date, color='red', linestyle='--')
+        plt.text(
+            min_date,
+            y_max * .8,
+            min_date.strftime('%Y-%m-%d') + ' ',
+            ha='right', fontsize=12, weight='bold', color='red'
+        )
+
+    # The vertical line for the latest relevant date
+    if max_date is not None:
+        plt.axvline(x=max_date, color="red", linestyle="--")
+        plt.text(
+            max_date,
+            y_max * .8,
+            ' ' + max_date.strftime('%Y-%m-%d'),
+            ha='left', fontsize=12, weight='bold', color='red'
+        )
+
+    plt.savefig(
+        f'../img/{count_type} of orders by period of {step_in_days} days.png',
+        facecolor='white',
+        bbox_inches='tight',
+        dpi=300   # x 2
+    )
 
     plt.show()

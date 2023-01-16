@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import display
 from scipy.stats import chi2_contingency, entropy
@@ -208,3 +209,57 @@ def discrete_stats(data, name=None):
         stats.index.names = [name]
 
     return stats
+
+
+def plot_discrete_stats(stats, precision=.1):
+    table_name = stats.index.name
+    filling_rate = stats[['Filling rate', ]].copy()
+    na_rate = 1 - filling_rate['Filling rate']
+    filling_rate.insert(0, 'NA_', na_rate)
+    filling_rate = filling_rate * 100
+    filling_rate.columns = ['NA', 'Filled']
+
+    shannon_entropy = stats['Shannon entropy']
+    shannon_entropy = np.maximum(shannon_entropy * 100, precision)
+
+    # Create stacked bar chart
+    ax1 = filling_rate.plot(kind='bar', stacked=True, color=['lightcoral', 'lightgreen'])
+    legend1 = ax1.legend(['NA', 'Filled'], loc='upper left', bbox_to_anchor=(1, 1))
+    plt.gca().add_artist(legend1)
+
+    # Add scatter plot for Shannon entropy
+    ax2 = plt.scatter(
+        np.arange(len(filling_rate)),  # x-coordinates
+        shannon_entropy,               # y-coordinates
+        s=200,                         # size of the points
+        color='black'
+    )
+    plt.legend([ax2], ['Shannon entropy'], loc='upper left', bbox_to_anchor=(1, .8))
+
+    plt.yscale('log')
+    plt.ylim(precision, 100)
+
+    # Axis titles
+    plt.ylabel('Filling rate & Shannon entropy')
+    plt.xlabel('')
+
+    # Rotate x-axis labels
+    plt.xticks(rotation=30, ha='right')
+
+    # Add overall title
+    plt.title(f'Discrete statistics of `{table_name}` table', fontsize=16)
+
+    plt.savefig(
+        f'../img/Filling rate & Shannon entropy of `{table_name}`.png',
+        facecolor='white',
+        bbox_inches='tight',
+        dpi=300   # x 2
+    )
+
+    plt.show()
+
+
+def show_discrete_stats(data, name=None):
+    stats = discrete_stats(data, name=name)
+    display(stats)
+    plot_discrete_stats(stats)
